@@ -7,46 +7,25 @@ const supabase = createClient(
 )
 
 type SKU = {
-  id: string
-  name: string
-  category: string
-  current_stock: number
-  safety_reserve: number
-  status: string
-  expected_restock_date: string | null
+  id: string; name: string; category: string; current_stock: number
+  safety_reserve: number; status: string; expected_restock_date: string | null
   expected_restock_qty: number | null
 }
 
 type BacklogOrder = {
-  id: string
-  order_id: string
-  customer_name: string
-  sku_id: string
-  qty: number
-  order_date: string
-  status: string
-  priority: boolean
+  id: string; order_id: string; customer_name: string; sku_id: string
+  qty: number; order_date: string; status: string; priority: boolean
 }
 
 type TransferOrder = {
-  id: string
-  to_number: string
-  destination: string
-  sku: string
-  qty: number
-  pick_up_date: string
-  eta_destination: string
-  shipping_method: string
-  status: string
+  id: string; to_number: string; destination: string; sku: string
+  qty: number; pick_up_date: string; eta_destination: string
+  shipping_method: string; status: string
 }
 
 type ChangelogEntry = {
-  id: string
-  sku: string
-  previous_qty: number
-  new_qty: number
-  comment: string
-  changed_at: string
+  id: string; sku: string; previous_qty: number; new_qty: number
+  comment: string; changed_at: string
 }
 
 type Tab = 'dashboard' | 'backlog' | 'weekly' | 'import' | 'transfers'
@@ -58,19 +37,30 @@ export default function Home() {
   const [transfers, setTransfers] = useState<TransferOrder[]>([])
   const [loading, setLoading] = useState(true)
   const [importStatus, setImportStatus] = useState<string | null>(null)
+
+  // Stock edit
   const [editingSku, setEditingSku] = useState<SKU | null>(null)
-  const [editQty, setEditQty] = useState<number>(0)
-  const [editComment, setEditComment] = useState<string>('')
+  const [editQty, setEditQty] = useState(0)
+  const [editComment, setEditComment] = useState('')
   const [editSaving, setEditSaving] = useState(false)
   const [changelog, setChangelog] = useState<ChangelogEntry[]>([])
   const [showChangelog, setShowChangelog] = useState(false)
+
+  // Backlog filters
   const [filterSku, setFilterSku] = useState('all')
   const [filterStatus, setFilterStatus] = useState('active')
   const [searchOrder, setSearchOrder] = useState('')
 
-  useEffect(() => {
-    fetchAll()
-  }, [])
+  // Transfer order edit
+  const [editingTO, setEditingTO] = useState<TransferOrder | null>(null)
+  const [toEdits, setToEdits] = useState<Partial<TransferOrder>>({})
+  const [toComment, setToComment] = useState('')
+  const [toSaving, setToSaving] = useState(false)
+
+  // Collapsed warehouses
+  const [collapsedWarehouses, setCollapsedWarehouses] = useState<Set<string>>(new Set())
+
+  useEffect(() => { fetchAll() }, [])
 
   async function fetchAll() {
     setLoading(true)
@@ -86,31 +76,47 @@ export default function Home() {
   }
 
   async function fetchChangelog() {
-    const { data } = await supabase
-      .from('stock_changelog')
-      .select('*')
-      .order('changed_at', { ascending: false })
-      .limit(100)
+    const { data } = await supabase.from('stock_changelog').select('*').order('changed_at', { ascending: false }).limit(100)
     if (data) setChangelog(data)
   }
 
   async function saveStockEdit() {
     if (!editingSku) return
     setEditSaving(true)
-    await supabase.from('stock_changelog').insert({
-      sku: editingSku.id,
-      previous_qty: editingSku.current_stock,
-      new_qty: editQty,
-      comment: editComment,
+    await supabase.from('stock_changelog').insert({ sku: editingSku.id, previous_qty: editingSku.current_stock, new_qty: editQty, comment: editComment })
+    await supabase.from('skus').update({ current_stock: editQty, status: editQty === 0 ? 'out' : editQty <= (editingSku.safety_reserve || 0) ? 'critical' : 'ok' }).eq('id', editingSku.id)
+    setEditingSku(null); setEditComment(''); setEditSaving(false); fetchAll()
+  }
+
+  async function saveToEdit() {
+    if (!editingTO || !toComment.trim()) return
+    setToSaving(true)
+    const logs: any[] = []
+    const fields: (keyof TransferOrder)[] = ['sku', 'qty', 'pick_up_date', 'eta_destination', 'shipping_method', 'status', 'destination', 'to_number']
+    for (const field of fields) {
+      if (toEdits[field] !== undefined && String(toEdits[field]) !== String((editingTO as any)[field])) {
+        logs.push({ to_id: editingTO.id, field_changed: field, previous_value: String((editingTO as any)[field] ?? ''), new_value: String(toEdits[field]), comment: toComment })
+      }
+    }
+    if (logs.length > 0) {
+      await supabase.from('to_changelog').insert(logs)
+      await supabase.from('transfer_orders').update(toEdits).eq('id', editingTO.id)
+    }
+    setEditingTO(null); setToEdits({}); setToComment(''); setToSaving(false); fetchAll()
+  }
+
+  function openToEdit(t: TransferOrder) {
+    setEditingTO(t)
+    setToEdits({ sku: t.sku, qty: t.qty, pick_up_date: t.pick_up_date, eta_destination: t.eta_destination, shipping_method: t.shipping_method, status: t.status, destination: t.destination, to_number: t.to_number })
+    setToComment('')
+  }
+
+  function toggleWarehouse(dest: string) {
+    setCollapsedWarehouses(prev => {
+      const next = new Set(prev)
+      next.has(dest) ? next.delete(dest) : next.add(dest)
+      return next
     })
-    await supabase.from('skus').update({
-      current_stock: editQty,
-      status: editQty === 0 ? 'out' : editQty <= (editingSku.safety_reserve || 0) ? 'critical' : 'ok',
-    }).eq('id', editingSku.id)
-    setEditingSku(null)
-    setEditComment('')
-    setEditSaving(false)
-    fetchAll()
   }
 
   async function handleCSV(file: File) {
@@ -118,42 +124,23 @@ export default function Home() {
     const text = await file.text()
     const lines = text.split('\n').filter(Boolean)
     const headers = lines[0].split(',').map(h => h.replace(/"/g, '').trim())
-
-    const nameIdx = headers.findIndex(h => h.toLowerCase().includes('name'))
-    const orderIdx = headers.findIndex(h => h.toLowerCase().includes('name') && h.toLowerCase().includes('order')) !== -1
-      ? headers.findIndex(h => h.toLowerCase().includes('name') && h.toLowerCase().includes('order'))
-      : headers.findIndex(h => h.toLowerCase() === 'name')
-    const skuIdx = headers.findIndex(h => h.toLowerCase() === 'sku' || h.toLowerCase().includes('lineitem sku'))
+    const nameIdx = headers.findIndex(h => h.toLowerCase() === 'name')
+    const skuIdx = headers.findIndex(h => h.toLowerCase().includes('lineitem sku'))
     const qtyIdx = headers.findIndex(h => h.toLowerCase().includes('lineitem quantity'))
-    const idIdx = headers.findIndex(h => h.toLowerCase() === 'name' || h.toLowerCase() === 'order id')
-    const dateIdx = headers.findIndex(h => h.toLowerCase().includes('created at') || h.toLowerCase().includes('date'))
+    const dateIdx = headers.findIndex(h => h.toLowerCase().includes('created at'))
     const finIdx = headers.findIndex(h => h.toLowerCase().includes('financial status'))
     const shipIdx = headers.findIndex(h => h.toLowerCase().includes('requires shipping'))
-
-    let inserted = 0
-    let skipped = 0
-
+    let inserted = 0; let skipped = 0
     for (let i = 1; i < lines.length; i++) {
       const cols = lines[i].split(',').map(c => c.replace(/"/g, '').trim())
       if (!cols[skuIdx]) { skipped++; continue }
       if (cols[finIdx]?.toLowerCase() !== 'paid') { skipped++; continue }
       if (cols[shipIdx]?.toLowerCase() === 'false') { skipped++; continue }
-
       const skuStatus = skus.find(s => s.id === cols[skuIdx])?.status
-      const { error } = await supabase.from('backlog_orders').insert({
-        order_id: cols[idIdx],
-        customer_name: cols[nameIdx] || '',
-        sku_id: cols[skuIdx],
-        qty: parseInt(cols[qtyIdx]) || 1,
-        order_date: cols[dateIdx] || new Date().toISOString(),
-        status: skuStatus === 'out' || skuStatus === 'critical' ? 'on_hold' : 'active',
-        priority: false,
-      })
+      const { error } = await supabase.from('backlog_orders').insert({ order_id: cols[nameIdx], customer_name: cols[nameIdx] || '', sku_id: cols[skuIdx], qty: parseInt(cols[qtyIdx]) || 1, order_date: cols[dateIdx] || new Date().toISOString(), status: skuStatus === 'out' || skuStatus === 'critical' ? 'on_hold' : 'active', priority: false })
       if (!error) inserted++; else skipped++
     }
-
-    setImportStatus(`Done — ${inserted} orders imported, ${skipped} skipped`)
-    fetchAll()
+    setImportStatus(`Done — ${inserted} orders imported, ${skipped} skipped`); fetchAll()
   }
 
   const outCount = skus.filter(s => s.status === 'out').length
@@ -165,15 +152,14 @@ export default function Home() {
     if (filterStatus === 'on_hold' && o.status !== 'on_hold') return false
     if (filterStatus === 'priority' && !o.priority) return false
     if (filterSku !== 'all' && o.sku_id !== filterSku) return false
-    if (searchOrder && !o.order_id.toLowerCase().includes(searchOrder.toLowerCase()) && !o.customer_name.toLowerCase().includes(searchOrder.toLowerCase())) return false
+    if (searchOrder && !o.order_id?.toLowerCase().includes(searchOrder.toLowerCase()) && !o.customer_name?.toLowerCase().includes(searchOrder.toLowerCase())) return false
     return true
   })
 
   const weeklyData = (() => {
     const weeks: Record<string, Record<string, number>> = {}
     orders.forEach(o => {
-      const d = new Date(o.order_date)
-      const monday = new Date(d)
+      const d = new Date(o.order_date); const monday = new Date(d)
       monday.setDate(d.getDate() - ((d.getDay() + 6) % 7))
       const key = monday.toISOString().split('T')[0]
       if (!weeks[key]) weeks[key] = {}
@@ -191,10 +177,13 @@ export default function Home() {
     return acc
   }, {} as Record<string, TransferOrder[]>)
 
+  const stickyHeader = { position: 'sticky' as const, top: 0, zIndex: 50 }
+
   return (
     <div style={{ fontFamily: 'Inter, sans-serif', minHeight: '100vh', background: '#f9fafb', color: '#111' }}>
-      {/* Header */}
-      <div style={{ background: '#fff', borderBottom: '1px solid #e5e7eb', padding: '12px 24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+
+      {/* Sticky Header */}
+      <div style={{ ...stickyHeader, background: '#fff', borderBottom: '1px solid #e5e7eb', padding: '12px 24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
           <span style={{ fontWeight: 700, fontSize: 16 }}>Plateful</span>
           <span style={{ color: '#6b7280', fontSize: 14 }}>Stockout Manager</span>
@@ -207,15 +196,12 @@ export default function Home() {
         </div>
       </div>
 
-      {/* Tabs */}
-      <div style={{ background: '#fff', borderBottom: '1px solid #e5e7eb', padding: '0 24px', display: 'flex', gap: 24 }}>
+      {/* Sticky Tabs */}
+      <div style={{ ...stickyHeader, top: 49, background: '#fff', borderBottom: '1px solid #e5e7eb', padding: '0 24px', display: 'flex', gap: 24 }}>
         {(['dashboard', 'backlog', 'weekly', 'transfers', 'import'] as Tab[]).map(t => (
-          <button key={t} onClick={() => setTab(t)} style={{
-            padding: '12px 0', background: 'none', border: 'none', cursor: 'pointer',
-            borderBottom: tab === t ? '2px solid #111' : '2px solid transparent',
-            fontWeight: tab === t ? 600 : 400, fontSize: 14, color: tab === t ? '#111' : '#6b7280',
-            textTransform: 'capitalize'
-          }}>{t === 'transfers' ? 'Transfer Orders' : t}</button>
+          <button key={t} onClick={() => setTab(t)} style={{ padding: '12px 0', background: 'none', border: 'none', cursor: 'pointer', borderBottom: tab === t ? '2px solid #111' : '2px solid transparent', fontWeight: tab === t ? 600 : 400, fontSize: 14, color: tab === t ? '#111' : '#6b7280', textTransform: 'capitalize', whiteSpace: 'nowrap' }}>
+            {t === 'transfers' ? 'Transfer Orders' : t}
+          </button>
         ))}
       </div>
 
@@ -241,11 +227,9 @@ export default function Home() {
                         <div style={{ fontWeight: 600, fontSize: 14 }}>{s.name}</div>
                         <div style={{ fontSize: 11, color: '#9ca3af', marginTop: 2 }}>{s.id}</div>
                       </div>
-                      <span style={{
-                        fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 20,
-                        background: isOut ? '#fee2e2' : isCrit ? '#fef3c7' : '#dcfce7',
-                        color: isOut ? '#dc2626' : isCrit ? '#d97706' : '#16a34a'
-                      }}>{isOut ? 'Out of stock' : isCrit ? 'Critical' : 'In stock'}</span>
+                      <span style={{ fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 20, background: isOut ? '#fee2e2' : isCrit ? '#fef3c7' : '#dcfce7', color: isOut ? '#dc2626' : isCrit ? '#d97706' : '#16a34a' }}>
+                        {isOut ? 'Out of stock' : isCrit ? 'Critical' : 'In stock'}
+                      </span>
                     </div>
                     <div style={{ fontSize: 13, marginBottom: 4 }}>Stock: <strong>{s.current_stock.toLocaleString()}</strong></div>
                     <div style={{ fontSize: 13, color: '#6b7280', marginBottom: 10 }}>Safety reserve: {s.safety_reserve || 0}</div>
@@ -303,12 +287,8 @@ export default function Home() {
                         </span>
                       </td>
                       <td style={{ padding: '10px 16px', display: 'flex', gap: 6 }}>
-                        <button onClick={async () => { await supabase.from('backlog_orders').update({ priority: !o.priority }).eq('id', o.id); fetchAll() }} style={{ fontSize: 11, padding: '4px 8px', border: '1px solid #e5e7eb', borderRadius: 5, cursor: 'pointer', background: '#fff' }}>
-                          {o.priority ? 'Unprioritise' : 'Prioritise'}
-                        </button>
-                        <button onClick={async () => { await supabase.from('backlog_orders').update({ status: o.status === 'on_hold' ? 'active' : 'on_hold' }).eq('id', o.id); fetchAll() }} style={{ fontSize: 11, padding: '4px 8px', border: '1px solid #e5e7eb', borderRadius: 5, cursor: 'pointer', background: '#fff' }}>
-                          {o.status === 'on_hold' ? 'Activate' : 'Hold'}
-                        </button>
+                        <button onClick={async () => { await supabase.from('backlog_orders').update({ priority: !o.priority }).eq('id', o.id); fetchAll() }} style={{ fontSize: 11, padding: '4px 8px', border: '1px solid #e5e7eb', borderRadius: 5, cursor: 'pointer', background: '#fff' }}>{o.priority ? 'Unprioritise' : 'Prioritise'}</button>
+                        <button onClick={async () => { await supabase.from('backlog_orders').update({ status: o.status === 'on_hold' ? 'active' : 'on_hold' }).eq('id', o.id); fetchAll() }} style={{ fontSize: 11, padding: '4px 8px', border: '1px solid #e5e7eb', borderRadius: 5, cursor: 'pointer', background: '#fff' }}>{o.status === 'on_hold' ? 'Activate' : 'Hold'}</button>
                       </td>
                     </tr>
                   ))}
@@ -322,7 +302,7 @@ export default function Home() {
         {/* Weekly */}
         {!loading && tab === 'weekly' && (
           <div>
-            <p style={{ fontSize: 13, color: '#6b7280', marginBottom: 16 }}>Backlog units per SKU by order week. Numbers show units — amber = on hold, amber★ = priority, green = fulfilled.</p>
+            <p style={{ fontSize: 13, color: '#6b7280', marginBottom: 16 }}>Backlog units per SKU by order week.</p>
             {weeklyData.length === 0 ? (
               <div style={{ color: '#9ca3af', padding: 40, textAlign: 'center' }}>No order data yet. Import a CSV first.</div>
             ) : (
@@ -357,51 +337,72 @@ export default function Home() {
           <div>
             <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
               <h2 style={{ fontSize: 15, fontWeight: 600, margin: 0 }}>Inbound Transfer Orders</h2>
+              <div style={{ fontSize: 12, color: '#9ca3af' }}>{transfers.length} total rows</div>
             </div>
             {Object.keys(groupedTransfers).length === 0 ? (
-              <div style={{ color: '#9ca3af', padding: 40, textAlign: 'center' }}>No transfer orders in database yet.</div>
+              <div style={{ color: '#9ca3af', padding: 40, textAlign: 'center' }}>No transfer orders loaded.</div>
             ) : (
-              Object.entries(groupedTransfers).sort(([a], [b]) => a.localeCompare(b)).map(([dest, tos]) => (
-                <div key={dest} style={{ marginBottom: 24 }}>
-                  <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 8, padding: '6px 12px', background: '#f3f4f6', borderRadius: 6, display: 'inline-block' }}>📦 {dest}</div>
-                  <div style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: 10, overflow: 'hidden' }}>
-                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-                      <thead>
-                        <tr style={{ background: '#f9fafb', borderBottom: '1px solid #e5e7eb' }}>
-                          {['TO Number', 'SKU', 'Qty', 'Pick Up', 'ETA', 'Method', 'Status'].map(h => (
-                            <th key={h} style={{ padding: '10px 16px', textAlign: 'left', fontWeight: 600, color: '#374151', fontSize: 12, textTransform: 'uppercase', letterSpacing: '0.05em', whiteSpace: 'nowrap' }}>{h}</th>
-                          ))}
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {tos.sort((a, b) => (a.eta_destination || '').localeCompare(b.eta_destination || '')).map(t => {
-                          const daysOut = t.eta_destination ? Math.ceil((new Date(t.eta_destination).getTime() - Date.now()) / 86400000) : null
-                          return (
-                            <tr key={t.id} style={{ borderBottom: '1px solid #f3f4f6' }}>
-                              <td style={{ padding: '10px 16px', fontWeight: 500, color: '#374151' }}>{t.to_number || '—'}</td>
-                              <td style={{ padding: '10px 16px' }}><span style={{ background: '#f3f4f6', padding: '2px 8px', borderRadius: 4, fontSize: 12 }}>{t.sku}</span></td>
-                              <td style={{ padding: '10px 16px', fontWeight: 600 }}>{t.qty?.toLocaleString()}</td>
-                              <td style={{ padding: '10px 16px', color: '#6b7280' }}>{t.pick_up_date ? new Date(t.pick_up_date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }) : '—'}</td>
-                              <td style={{ padding: '10px 16px' }}>
-                                {t.eta_destination ? (
-                                  <span style={{ color: daysOut !== null && daysOut <= 7 ? '#16a34a' : daysOut !== null && daysOut <= 21 ? '#d97706' : '#374151' }}>
-                                    {new Date(t.eta_destination).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}
-                                    {daysOut !== null && <span style={{ fontSize: 11, color: '#9ca3af', marginLeft: 6 }}>({daysOut}d)</span>}
-                                  </span>
-                                ) : '—'}
-                              </td>
-                              <td style={{ padding: '10px 16px', color: '#6b7280' }}>{t.shipping_method || '—'}</td>
-                              <td style={{ padding: '10px 16px' }}>
-                                <span style={{ fontSize: 12, padding: '2px 8px', borderRadius: 12, background: t.status === 'TO Pending' ? '#fef3c7' : '#dcfce7', color: t.status === 'TO Pending' ? '#d97706' : '#15803d', fontWeight: 500 }}>{t.status}</span>
-                              </td>
+              Object.entries(groupedTransfers).sort(([a], [b]) => a.localeCompare(b)).map(([dest, tos]) => {
+                const isCollapsed = collapsedWarehouses.has(dest)
+                const pendingCount = tos.filter(t => t.status === 'TO Pending').length
+                const inTransferCount = tos.filter(t => t.status === 'In Transfer').length
+                return (
+                  <div key={dest} style={{ marginBottom: 20 }}>
+                    {/* Warehouse Header — clickable to collapse */}
+                    <div onClick={() => toggleWarehouse(dest)} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 16px', background: '#f3f4f6', borderRadius: isCollapsed ? 8 : '8px 8px 0 0', cursor: 'pointer', userSelect: 'none', border: '1px solid #e5e7eb' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                        <span style={{ fontWeight: 700, fontSize: 14 }}>📦 {dest}</span>
+                        <span style={{ fontSize: 12, color: '#6b7280' }}>{tos.length} lines</span>
+                        {inTransferCount > 0 && <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 10, background: '#dcfce7', color: '#15803d', fontWeight: 500 }}>{inTransferCount} in transit</span>}
+                        {pendingCount > 0 && <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 10, background: '#fef3c7', color: '#d97706', fontWeight: 500 }}>{pendingCount} pending</span>}
+                      </div>
+                      <span style={{ fontSize: 16, color: '#6b7280', transform: isCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)', transition: 'transform 0.2s' }}>▾</span>
+                    </div>
+
+                    {!isCollapsed && (
+                      <div style={{ border: '1px solid #e5e7eb', borderTop: 'none', borderRadius: '0 0 8px 8px', overflow: 'hidden', background: '#fff' }}>
+                        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                          <thead>
+                            <tr style={{ background: '#f9fafb', borderBottom: '1px solid #e5e7eb' }}>
+                              {['TO Number', 'SKU', 'Qty', 'Pick Up', 'ETA', 'Method', 'Status', ''].map(h => (
+                                <th key={h} style={{ padding: '10px 16px', textAlign: 'left', fontWeight: 600, color: '#374151', fontSize: 12, textTransform: 'uppercase', letterSpacing: '0.05em', whiteSpace: 'nowrap' }}>{h}</th>
+                              ))}
                             </tr>
-                          )
-                        })}
-                      </tbody>
-                    </table>
+                          </thead>
+                          <tbody>
+                            {tos.sort((a, b) => (a.eta_destination || '').localeCompare(b.eta_destination || '')).map(t => {
+                              const daysOut = t.eta_destination ? Math.ceil((new Date(t.eta_destination).getTime() - Date.now()) / 86400000) : null
+                              return (
+                                <tr key={t.id} style={{ borderBottom: '1px solid #f3f4f6' }}>
+                                  <td style={{ padding: '10px 16px', fontWeight: 500, color: '#374151' }}>{t.to_number || '—'}</td>
+                                  <td style={{ padding: '10px 16px' }}><span style={{ background: '#f3f4f6', padding: '2px 8px', borderRadius: 4, fontSize: 12 }}>{t.sku}</span></td>
+                                  <td style={{ padding: '10px 16px', fontWeight: 600 }}>{t.qty?.toLocaleString()}</td>
+                                  <td style={{ padding: '10px 16px', color: '#6b7280' }}>{t.pick_up_date ? new Date(t.pick_up_date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }) : '—'}</td>
+                                  <td style={{ padding: '10px 16px' }}>
+                                    {t.eta_destination ? (
+                                      <span style={{ color: daysOut !== null && daysOut <= 7 ? '#16a34a' : daysOut !== null && daysOut <= 21 ? '#d97706' : '#374151' }}>
+                                        {new Date(t.eta_destination).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}
+                                        {daysOut !== null && <span style={{ fontSize: 11, color: '#9ca3af', marginLeft: 6 }}>({daysOut}d)</span>}
+                                      </span>
+                                    ) : '—'}
+                                  </td>
+                                  <td style={{ padding: '10px 16px', color: '#6b7280' }}>{t.shipping_method || '—'}</td>
+                                  <td style={{ padding: '10px 16px' }}>
+                                    <span style={{ fontSize: 12, padding: '2px 8px', borderRadius: 12, background: t.status === 'TO Pending' ? '#fef3c7' : t.status === 'In Transfer' ? '#dbeafe' : '#dcfce7', color: t.status === 'TO Pending' ? '#d97706' : t.status === 'In Transfer' ? '#1d4ed8' : '#15803d', fontWeight: 500 }}>{t.status}</span>
+                                  </td>
+                                  <td style={{ padding: '10px 16px' }}>
+                                    <button onClick={() => openToEdit(t)} style={{ fontSize: 11, padding: '4px 10px', border: '1px solid #e5e7eb', borderRadius: 6, cursor: 'pointer', background: '#fff', whiteSpace: 'nowrap' }}>Edit</button>
+                                  </td>
+                                </tr>
+                              )
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
                   </div>
-                </div>
-              ))
+                )
+              })
             )}
           </div>
         )}
@@ -412,35 +413,13 @@ export default function Home() {
             <div style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: 10, padding: 24, marginBottom: 20 }}>
               <h3 style={{ fontSize: 15, fontWeight: 600, marginBottom: 4 }}>Daily Shopify CSV import</h3>
               <p style={{ fontSize: 13, color: '#6b7280', marginBottom: 16 }}>Shopify Admin → Orders → Export → CSV. Re-importing the same file is safe — duplicate orders are skipped automatically.</p>
-              <div
-                onDragOver={e => e.preventDefault()}
-                onDrop={e => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f) handleCSV(f) }}
-                onClick={() => document.getElementById('csvInput')?.click()}
-                style={{ border: '2px dashed #e5e7eb', borderRadius: 8, padding: '40px 24px', textAlign: 'center', cursor: 'pointer', transition: 'border-color 0.2s' }}
-              >
+              <div onDragOver={e => e.preventDefault()} onDrop={e => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f) handleCSV(f) }} onClick={() => document.getElementById('csvInput')?.click()} style={{ border: '2px dashed #e5e7eb', borderRadius: 8, padding: '40px 24px', textAlign: 'center', cursor: 'pointer' }}>
                 <div style={{ fontSize: 24, marginBottom: 8 }}>↑</div>
                 <div style={{ fontWeight: 500, marginBottom: 4 }}>Drop Shopify CSV here</div>
                 <div style={{ fontSize: 12, color: '#9ca3af' }}>or click to browse</div>
                 <input id="csvInput" type="file" accept=".csv" style={{ display: 'none' }} onChange={e => { const f = e.target.files?.[0]; if (f) handleCSV(f) }} />
               </div>
               {importStatus && <div style={{ marginTop: 12, padding: '10px 14px', background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 8, fontSize: 13, color: '#15803d' }}>{importStatus}</div>}
-            </div>
-            <div style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: 10, padding: 20 }}>
-              <h3 style={{ fontSize: 14, fontWeight: 600, marginBottom: 12 }}>Import rules</h3>
-              {[
-                ['Financial status ≠ paid', 'Skipped'],
-                ['Line item requires shipping = false', 'Skipped (digital/virtual)'],
-                ['SKU in mapping table', 'Resolved to canonical SKU'],
-                ['Bundle SKU', 'Expanded to component SKUs'],
-                ['SKU status: out or critical', '→ placed on_hold'],
-                ['SKU status: ok', 'Tracked as not_affected'],
-                ['Duplicate order ID', 'Skipped (idempotent)'],
-              ].map(([rule, result]) => (
-                <div key={rule} style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid #f3f4f6', fontSize: 13 }}>
-                  <span style={{ color: '#6b7280' }}>{rule}</span>
-                  <span style={{ fontWeight: 500 }}>{result}</span>
-                </div>
-              ))}
             </div>
           </div>
         )}
@@ -466,7 +445,48 @@ export default function Home() {
         </div>
       )}
 
-      {/* Changelog Modal */}
+      {/* Edit TO Modal */}
+      {editingTO && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 }}>
+          <div style={{ background: '#fff', borderRadius: 12, padding: 28, width: 500, boxShadow: '0 20px 60px rgba(0,0,0,0.15)', maxHeight: '90vh', overflow: 'auto' }}>
+            <h3 style={{ fontSize: 16, fontWeight: 700, marginBottom: 4 }}>Edit Transfer Order</h3>
+            <p style={{ fontSize: 12, color: '#9ca3af', marginBottom: 20 }}>{editingTO.to_number || 'No TO number'} · {editingTO.destination}</p>
+            {([
+              { label: 'TO Number', field: 'to_number', type: 'text' },
+              { label: 'Destination', field: 'destination', type: 'text' },
+              { label: 'SKU', field: 'sku', type: 'text' },
+              { label: 'Qty', field: 'qty', type: 'number' },
+              { label: 'Pick Up Date', field: 'pick_up_date', type: 'date' },
+              { label: 'ETA', field: 'eta_destination', type: 'date' },
+              { label: 'Shipping Method', field: 'shipping_method', type: 'text' },
+            ] as { label: string; field: keyof TransferOrder; type: string }[]).map(({ label, field, type }) => (
+              <div key={field} style={{ marginBottom: 14 }}>
+                <label style={{ fontSize: 12, fontWeight: 500, display: 'block', marginBottom: 4, color: '#374151' }}>{label}</label>
+                <input type={type} value={(toEdits[field] as string | number) ?? ''} onChange={e => setToEdits(prev => ({ ...prev, [field]: type === 'number' ? parseInt(e.target.value) || 0 : e.target.value }))} style={{ width: '100%', padding: '7px 10px', border: '1px solid #e5e7eb', borderRadius: 6, fontSize: 13, boxSizing: 'border-box' }} />
+              </div>
+            ))}
+            <div style={{ marginBottom: 14 }}>
+              <label style={{ fontSize: 12, fontWeight: 500, display: 'block', marginBottom: 4, color: '#374151' }}>Status</label>
+              <select value={(toEdits.status as string) ?? ''} onChange={e => setToEdits(prev => ({ ...prev, status: e.target.value }))} style={{ width: '100%', padding: '7px 10px', border: '1px solid #e5e7eb', borderRadius: 6, fontSize: 13, boxSizing: 'border-box' }}>
+                <option value="TO Pending">TO Pending</option>
+                <option value="In Transfer">In Transfer</option>
+                <option value="Delivered">Delivered</option>
+                <option value="Cancelled">Cancelled</option>
+              </select>
+            </div>
+            <label style={{ fontSize: 12, fontWeight: 500, display: 'block', marginBottom: 4, color: '#374151' }}>Comment <span style={{ color: '#9ca3af', fontWeight: 400 }}>(required)</span></label>
+            <textarea value={toComment} onChange={e => setToComment(e.target.value)} placeholder="e.g. ETA updated per forwarder confirmation 24 Mar" rows={2} style={{ width: '100%', padding: '8px 12px', border: '1px solid #e5e7eb', borderRadius: 8, fontSize: 13, resize: 'vertical', marginBottom: 20, boxSizing: 'border-box' }} />
+            <div style={{ display: 'flex', gap: 10 }}>
+              <button onClick={() => setEditingTO(null)} style={{ flex: 1, padding: '9px 0', border: '1px solid #e5e7eb', borderRadius: 8, cursor: 'pointer', background: '#fff', fontSize: 14 }}>Cancel</button>
+              <button onClick={saveToEdit} disabled={!toComment.trim() || toSaving} style={{ flex: 1, padding: '9px 0', border: 'none', borderRadius: 8, cursor: 'pointer', background: toComment.trim() ? '#111' : '#d1d5db', color: '#fff', fontSize: 14, fontWeight: 600 }}>
+                {toSaving ? 'Saving...' : 'Save Changes'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Stock Changelog Modal */}
       {showChangelog && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 }}>
           <div style={{ background: '#fff', borderRadius: 12, padding: 28, width: 600, maxHeight: '80vh', overflow: 'auto', boxShadow: '0 20px 60px rgba(0,0,0,0.15)' }}>
@@ -484,9 +504,7 @@ export default function Home() {
                 </div>
                 <div style={{ fontSize: 13, color: '#374151', marginBottom: 4 }}>
                   {c.previous_qty?.toLocaleString()} → <strong>{c.new_qty?.toLocaleString()}</strong>
-                  <span style={{ marginLeft: 8, color: c.new_qty > c.previous_qty ? '#16a34a' : '#dc2626', fontSize: 12 }}>
-                    ({c.new_qty > c.previous_qty ? '+' : ''}{(c.new_qty - c.previous_qty).toLocaleString()})
-                  </span>
+                  <span style={{ marginLeft: 8, color: c.new_qty > c.previous_qty ? '#16a34a' : '#dc2626', fontSize: 12 }}>({c.new_qty > c.previous_qty ? '+' : ''}{(c.new_qty - c.previous_qty).toLocaleString()})</span>
                 </div>
                 <div style={{ fontSize: 12, color: '#6b7280', fontStyle: 'italic' }}>{c.comment}</div>
               </div>
