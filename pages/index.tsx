@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import React, { useEffect, useState, CSSProperties, ReactNode, Fragment } from 'react'
 import { createClient } from '@supabase/supabase-js'
 
 const supabase = createClient(
@@ -199,11 +199,11 @@ export default function Home() {
   const dailyByWeek = (weekStart: string, channel: string, funnel: string) => { const weekDate = new Date(weekStart); const weekEnd = new Date(weekDate); weekEnd.setDate(weekDate.getDate() + 6); return fdData.filter(d => { const dt = new Date(d.date); return d.channel === channel && d.funnel === funnel && dt >= weekDate && dt <= weekEnd }).sort((a,b) => a.date.localeCompare(b.date)) }
   const getFW = (week: string, channel: string, funnel: string) => fwData.find(r => r.week_start === week && r.channel === channel && r.funnel === funnel)
 
-  const sticky: React.CSSProperties = { position: 'sticky', top: 0, zIndex: 50 }
-  const th: React.CSSProperties = { padding: '8px 12px', textAlign: 'left' as const, fontWeight: 600, color: '#374151', fontSize: 11, textTransform: 'uppercase' as const, letterSpacing: '0.04em', whiteSpace: 'nowrap' as const, background: '#f9fafb', borderBottom: '1px solid #e5e7eb' }
-  const td: React.CSSProperties = { padding: '8px 12px', borderBottom: '1px solid #f3f4f6', fontSize: 13 }
+  const sticky: CSSProperties = { position: 'sticky', top: 0, zIndex: 50 }
+  const th: CSSProperties = { padding: '8px 12px', textAlign: 'left' as const, fontWeight: 600, color: '#374151', fontSize: 11, textTransform: 'uppercase' as const, letterSpacing: '0.04em', whiteSpace: 'nowrap' as const, background: '#f9fafb', borderBottom: '1px solid #e5e7eb' }
+  const td: CSSProperties = { padding: '8px 12px', borderBottom: '1px solid #f3f4f6', fontSize: 13 }
 
-  const funnelBar = (collapsed: boolean, onClick: () => void, label: string, count: number, extra?: React.ReactNode) => (
+  const funnelBar = (collapsed: boolean, onClick: () => void, label: string, count: number, extra?: ReactNode) => (
     <div onClick={onClick} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 16px', background: '#f3f4f6', borderRadius: collapsed ? 8 : '8px 8px 0 0', cursor: 'pointer', userSelect: 'none', border: '1px solid #e5e7eb', marginBottom: collapsed ? 8 : 0 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}><span style={{ fontWeight: 700, fontSize: 14 }}>{label}</span>{count > 0 && <span style={{ fontSize: 12, color: '#9ca3af' }}>{count}</span>}{extra}</div>
       <span style={{ color: '#9ca3af', transform: collapsed ? 'rotate(-90deg)' : 'none', transition: 'transform 0.15s' }}>▾</span>
@@ -277,16 +277,16 @@ export default function Home() {
                               const future = isFuture(week)
                               const dailies = dailyByWeek(week, fcastChannel, funnel)
                               const dayCollapsed = collFcastWeeks.has(weekKey)
-                              const sub: React.CSSProperties = { ...th, background: 'transparent', borderLeft: '1px solid #f3f4f6', fontWeight: 400, fontSize: 10, textTransform: 'none' as const, letterSpacing: 0, color: '#9ca3af', padding: '4px 8px' }
+                              const sub: CSSProperties = { ...th, background: 'transparent', borderLeft: '1px solid #f3f4f6', fontWeight: 400, fontSize: 10, textTransform: 'none' as const, letterSpacing: 0, color: '#9ca3af', padding: '4px 8px' }
                               return (
-                                <React.Fragment key={week}>
+                                <Fragment key={week}>
                                   {!dayCollapsed && dailies.map(d => (
                                     <th key={d.date} style={{ ...sub, borderLeft: '2px solid #e5e7eb', color: '#6b7280' }}>{new Date(d.date).toLocaleDateString('en-GB', { weekday: 'short' })}</th>
                                   ))}
                                   <th style={{ ...sub, borderLeft: (!dailies.length || dayCollapsed) ? '2px solid #e5e7eb' : '1px solid #f3f4f6' }}>Actual</th>
                                   <th style={{ ...sub, color: future ? '#2563eb' : '#9ca3af' }}>Forecast</th>
                                   <th style={sub}>Δ%</th>
-                                </React.Fragment>
+                                </Fragment>
                               )
                             })}
                           </tr>
@@ -306,7 +306,7 @@ export default function Home() {
                                 const dailies = dailyByWeek(week, fcastChannel, funnel)
                                 const dayCollapsed = collFcastWeeks.has(weekKey)
                                 return (
-                                  <React.Fragment key={week}>
+                                  <Fragment key={week}>
                                     {!dayCollapsed && dailies.map(d => {
                                       const dv = ak === 'sales_actual' ? d.sales_actual : ak === 'ad_spend_actual' ? d.ad_spend_actual : null
                                       return <td key={d.date} style={{ ...td, textAlign: 'right' as const, borderLeft: '2px solid #e5e7eb', minWidth: 55, color: '#374151' }}>{dv != null ? fmt(dv) : '—'}</td>
@@ -319,7 +319,7 @@ export default function Home() {
                                     <td style={{ ...td, textAlign: 'right' as const, color: dc, fontWeight: dp ? 500 : 400, minWidth: 50 }}>
                                       {dp ? (parseFloat(dp) > 0 ? '+' : '') + dp + '%' : '—'}
                                     </td>
-                                  </React.Fragment>
+                                  </Fragment>
                                 )
                               })}
                             </tr>
