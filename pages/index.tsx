@@ -12,7 +12,13 @@ type BacklogOrder = { id: string; order_id: string; customer_name: string; sku_i
 type UERow = { sku: string; status: string; product_name: string; hts_code: string; old_tariff_pct: number; new_tariff_pct: number; manufacturer: string; manufacturer_country: string; production_lead_time_days: number; cbm: number; cogs: number; inspection: number; commission: number; tariff_cost: number; placement_fees: number; shipping_to_us: number; inbound_3pl: number; storage_3pl: number; cn_landed_cost: number; us_landed_cost: number; amazon_landed_cogs: number; referral_fees: number; pick_pack_amazon: number; selling_price_amazon: number; profit_amazon: number; margin_amazon: number; selling_price_dtc: number; transaction_fees_dtc: number; pick_pack_dtc: number; shipping_dtc: number; profit_dtc: number; margin_dtc: number; upc: string; asin: string; current_unit_cost: number; current_unit_cost_to: string; current_shipping_cost: number; current_shipping_cost_to: string }
 type ForecastWeekly = { id: string; week_start: string; channel: string; funnel: string; sales_forecast: number | null; sales_actual: number | null; ad_spend_forecast: number | null; ad_spend_actual: number | null; mer_forecast: number | null; mer_actual: number | null }
 type ForecastDaily = { id: string; date: string; channel: string; funnel: string; sales_actual: number | null; ad_spend_actual: number | null }
-type Tab = 'dashboard' | 'backlog' | 'weekly' | 'transfers' | 'ue' | 'forecast' | 'import'
+
+type SkuForecastConfig = { sku: string; asp_dtc: number; dtc_mix_pct: number; funnel: string }
+type ForecastUnitsWeekly = { id: string; sku: string; channel: string; week_start: string; units_actual: number | null; units_forecast: number | null }
+type Vendor = { id: string; vendor_name: string; full_name: string; type: string; description: string; country: string; address: string; contact_person: string; contact_number: string }
+type VendorPaymentTerms = { id: string; sku: string; factory: string; terms_description: string; deposit_pct: number; at_pickup_pct: number; balance_pct: number; balance_days: number }
+
+type Tab = 'dashboard' | 'backlog' | 'transfers' | 'ue' | 'forecast' | 'units' | 'vendors' | 'import'
 
 const FUNNELS_LIST = ['Food Warming Mat', 'Titanium Cutting Board', 'Titanium Pan', 'Jar Vacuum Sealer', 'Bag Vacuum Sealer']
 const FUNNEL_MAP: Record<string, string[]> = {
@@ -55,6 +61,10 @@ export default function Home() {
   const [ueData, setUeData] = useState<UERow[]>([])
   const [fwData, setFwData] = useState<ForecastWeekly[]>([])
   const [fdData, setFdData] = useState<ForecastDaily[]>([])
+  const [skuConfig, setSkuConfig] = useState<SkuForecastConfig[]>([])
+  const [unitsData, setUnitsData] = useState<ForecastUnitsWeekly[]>([])
+  const [vendors, setVendors] = useState<Vendor[]>([])
+  const [paymentTerms, setPaymentTerms] = useState<VendorPaymentTerms[]>([])
   const [loading, setLoading] = useState(true)
   const [showHidden, setShowHidden] = useState(false)
   const [importStatus, setImportStatus] = useState<string | null>(null)
@@ -98,16 +108,21 @@ export default function Home() {
 
   async function fetchAll() {
     setLoading(true)
-    const [{ data: s },{ data: o },{ data: t },{ data: u },{ data: fw },{ data: fd }] = await Promise.all([
+    const [{ data: s },{ data: o },{ data: t },{ data: u },{ data: fw },{ data: fd },{ data: sc },{ data: uw },{ data: vd },{ data: pt }] = await Promise.all([
       supabase.from('skus').select('*').order('name'),
       supabase.from('backlog_orders').select('*').order('order_date'),
       supabase.from('transfer_orders').select('*').order('eta_destination'),
       supabase.from('sku_unit_economics').select('*').order('sku'),
       supabase.from('forecast_weekly').select('*').order('week_start'),
       supabase.from('forecast_daily').select('*').order('date'),
+      supabase.from('sku_forecast_config').select('*'),
+      supabase.from('forecast_units_weekly').select('*').order('week_start'),
+      supabase.from('vendors').select('*').order('vendor_name'),
+      supabase.from('vendor_payment_terms').select('*'),
     ])
     if (s) setSkus(s); if (o) setOrders(o); if (t) setTransfers(t)
     if (u) setUeData(u); if (fw) setFwData(fw); if (fd) setFdData(fd)
+    if (sc) setSkuConfig(sc); if (uw) setUnitsData(uw); if (vd) setVendors(vd); if (pt) setPaymentTerms(pt)
     setLoading(false)
   }
 
@@ -220,7 +235,7 @@ export default function Home() {
         </div>
       </div>
       <div style={{ ...sticky, top: 48, background: '#fff', borderBottom: '1px solid #e5e7eb', padding: '0 24px', display: 'flex', gap: 16 }}>
-        {([["dashboard","Dashboard"],["forecast","Forecast"],["backlog","Backlog"],["weekly","Weekly"],["transfers","Transfer Orders"],["ue","Unit Economics"],["import","Import"]] as [Tab,string][]).map(([t,label]) => (
+        {([["dashboard","Dashboard"],["forecast","Forecast"],["units","Units"],["transfers","Transfer Orders"],["ue","Unit Economics"],["vendors","Vendors"],["backlog","Backlog"],["import","Import"]] as [Tab,string][]).map(([t,label]) => (
           <button key={t} onClick={() => setTab(t)} style={{ padding: '11px 0', background: 'none', border: 'none', cursor: 'pointer', borderBottom: tab === t ? '2px solid #111' : '2px solid transparent', fontWeight: tab === t ? 600 : 400, fontSize: 13, color: tab === t ? '#111' : '#6b7280', whiteSpace: 'nowrap' }}>{label}</button>
         ))}
       </div>
@@ -424,24 +439,153 @@ export default function Home() {
           </div>
         )}
 
-        {!loading && tab === 'weekly' && (
+        {!loading && tab === 'units' && (
           <div>
-            <p style={{ fontSize: 13, color: '#6b7280', marginBottom: 16 }}>Backlog units per SKU by order week.</p>
-            {weeklyData.length === 0 ? <div style={{ color: '#9ca3af', padding: 40, textAlign: 'center' }}>No order data yet.</div> : (
-              <div style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: 10, overflow: 'auto' }}>
-                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
-                  <thead><tr style={{ background: '#f9fafb', borderBottom: '1px solid #e5e7eb' }}>
-                    <th style={th}>WEEK OF</th>{skuIds.map(s => <th key={s} style={th}>{s}</th>)}
-                  </tr></thead>
-                  <tbody>{weeklyData.map(([week, data]) => (
-                    <tr key={week} style={{ borderBottom: '1px solid #f3f4f6' }}>
-                      <td style={{ ...td, fontWeight: 500 }}>{new Date(week).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}</td>
-                      {skuIds.map(s => <td key={s} style={{ ...td, textAlign: 'center' }}>{data[s] ? <span style={{ background: '#dcfce7', color: '#15803d', padding: '2px 8px', borderRadius: 10, fontWeight: 500 }}>{data[s]}</span> : <span style={{ color: '#d1d5db' }}>—</span>}</td>)}
-                    </tr>
-                  ))}</tbody>
-                </table>
-              </div>
-            )}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+              <h2 style={{ fontSize: 15, fontWeight: 600, margin: 0 }}>Units Forecast</h2>
+              <span style={{ fontSize: 12, color: '#9ca3af' }}>Calculated from revenue forecast × SKU revenue split ÷ ASP. Actuals from Shopify once connected.</span>
+            </div>
+            {(() => {
+              const funnels = ['Food Warming Mat','Titanium Cutting Board','Titanium Pan','Jar Vacuum Sealer','Bag Vacuum Sealer']
+              const weeks = [...new Set(fwData.map(r => r.week_start))].sort()
+              const pastWeeks = weeks.filter(w => new Date(w) <= new Date('2026-03-25'))
+              const futureWeeks = weeks.filter(w => new Date(w) > new Date('2026-03-25'))
+              const allWeeks = [...pastWeeks.slice(-6), ...futureWeeks.slice(0, 8)]
+              return funnels.map(funnel => {
+                const fskuConfigs = skuConfig.filter(c => c.funnel === funnel)
+                if (!fskuConfigs.length) return null
+                const collapsed = collFunnels.has('units_' + funnel)
+                return (
+                  <div key={funnel} style={{ marginBottom: 16 }}>
+                    {funnelBar(collapsed, () => toggle(collFunnels, 'units_' + funnel, setCollFunnels), funnel, fskuConfigs.length) as any}
+                    {!collapsed && (
+                      <div style={{ border: '1px solid #e5e7eb', borderTop: 'none', borderRadius: '0 0 8px 8px', background: '#fff', overflowX: 'auto' }}>
+                        <table style={{ borderCollapse: 'collapse', fontSize: 12, minWidth: 600 }}>
+                          <thead>
+                            <tr style={{ background: '#f9fafb' }}>
+                              <th style={{ ...th, width: 130, position: 'sticky', left: 0, background: '#f9fafb', zIndex: 10 }}>SKU</th>
+                              <th style={{ ...th, width: 80 }}>ASP</th>
+                              <th style={{ ...th, width: 70 }}>Split%</th>
+                              {allWeeks.map(w => {
+                                const future = new Date(w) > new Date('2026-03-25')
+                                return <th key={w} style={{ ...th, textAlign: 'center', background: future ? '#eff6ff' : '#f9fafb', borderLeft: '2px solid #e5e7eb', minWidth: 70 }}>
+                                  <span style={{ color: future ? '#2563eb' : '#374151' }}>{new Date(w).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}</span>
+                                </th>
+                              })}
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {fskuConfigs.map(cfg => {
+                              return (
+                                <tr key={cfg.sku} style={{ borderBottom: '1px solid #f3f4f6' }}>
+                                  <td style={{ ...td, fontWeight: 600, position: 'sticky', left: 0, background: '#fff', zIndex: 5, borderRight: '1px solid #e5e7eb' }}>
+                                    <span style={{ fontFamily: 'monospace', fontSize: 11, background: '#f3f4f6', padding: '2px 6px', borderRadius: 4 }}>{cfg.sku}</span>
+                                  </td>
+                                  <td style={{ ...td, color: '#6b7280' }}>${cfg.asp_dtc?.toFixed(0) ?? '—'}</td>
+                                  <td style={{ ...td, color: '#6b7280' }}>{cfg.dtc_mix_pct != null ? (cfg.dtc_mix_pct * 100).toFixed(1) + '%' : '—'}</td>
+                                  {allWeeks.map(w => {
+                                    const future = new Date(w) > new Date('2026-03-25')
+                                    // Actual from historical data
+                                    const actual = unitsData.find(u => u.sku === cfg.sku && u.week_start === w)?.units_actual
+                                    // Forecast: revenue forecast × rev split ÷ ASP
+                                    const fw = fwData.find(r => r.week_start === w && r.channel === 'DTC' && r.funnel === funnel)
+                                    const calcForecast = (fw?.sales_forecast != null && cfg.dtc_mix_pct != null && cfg.asp_dtc)
+                                      ? Math.round(fw.sales_forecast * cfg.dtc_mix_pct / cfg.asp_dtc)
+                                      : null
+                                    const display = actual ?? calcForecast
+                                    const isActual = actual != null
+                                    return (
+                                      <td key={w} style={{ ...td, textAlign: 'right', borderLeft: '2px solid #e5e7eb', color: isActual ? '#374151' : '#2563eb', fontWeight: isActual ? 400 : 500, background: future && !isActual ? '#eff6ff' : 'transparent' }}>
+                                        {display != null ? display.toLocaleString() : <span style={{ color: '#d1d5db' }}>—</span>}
+                                      </td>
+                                    )
+                                  })}
+                                </tr>
+                              )
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+                )
+              })
+            })()}
+          </div>
+        )}
+
+        {!loading && tab === 'vendors' && (
+          <div>
+            <div style={{ marginBottom: 20 }}>
+              <h2 style={{ fontSize: 15, fontWeight: 600, margin: 0 }}>Suppliers & Payment Terms</h2>
+            </div>
+            {['Manufacturer','3PL'].map(vtype => {
+              const vlist = vendors.filter(v => v.type === vtype)
+              if (!vlist.length) return null
+              const collapsed = collFunnels.has('vendor_' + vtype)
+              return (
+                <div key={vtype} style={{ marginBottom: 16 }}>
+                  {funnelBar(collapsed, () => toggle(collFunnels, 'vendor_' + vtype, setCollFunnels), vtype === '3PL' ? '3PL Warehouses' : 'Manufacturers', vlist.length) as any}
+                  {!collapsed && (
+                    <div style={{ border: '1px solid #e5e7eb', borderTop: 'none', borderRadius: '0 0 8px 8px', background: '#fff', overflow: 'hidden' }}>
+                      {vlist.map(v => {
+                        const vPT = paymentTerms.filter(p => p.factory === v.vendor_name || p.factory === v.full_name)
+                        const vCollapsed = collFunnels.has('vendor_row_' + v.id)
+                        return (
+                          <div key={v.id} style={{ borderBottom: '1px solid #f3f4f6' }}>
+                            <div onClick={() => toggle(collFunnels, 'vendor_row_' + v.id, setCollFunnels)} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', cursor: 'pointer', userSelect: 'none' }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+                                <div>
+                                  <div style={{ fontWeight: 600, fontSize: 13 }}>{v.vendor_name}</div>
+                                  {v.full_name && <div style={{ fontSize: 11, color: '#9ca3af' }}>{v.full_name}</div>}
+                                </div>
+                                <span style={{ fontSize: 11, padding: '2px 8px', background: '#f3f4f6', borderRadius: 10, color: '#6b7280' }}>{v.country}</span>
+                                {v.description && <span style={{ fontSize: 12, color: '#6b7280' }}>{v.description}</span>}
+                              </div>
+                              <span style={{ color: '#9ca3af', transform: vCollapsed ? 'rotate(-90deg)' : 'none', transition: 'transform 0.15s' }}>▾</span>
+                            </div>
+                            {!vCollapsed && (
+                              <div style={{ padding: '0 16px 16px', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+                                <div style={{ background: '#f9fafb', borderRadius: 8, padding: 14 }}>
+                                  <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', color: '#6b7280', marginBottom: 10 }}>Contact</div>
+                                  {v.address && <div style={{ fontSize: 12, color: '#374151', marginBottom: 6 }}>{v.address}</div>}
+                                  {v.contact_person && <div style={{ fontSize: 12, color: '#374151' }}>{v.contact_person}{v.contact_number ? ' · ' + v.contact_number : ''}</div>}
+                                </div>
+                                {vPT.length > 0 && (
+                                  <div style={{ background: '#f9fafb', borderRadius: 8, padding: 14 }}>
+                                    <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', color: '#6b7280', marginBottom: 10 }}>Payment Terms</div>
+                                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
+                                      <thead><tr>
+                                        <th style={{ ...th, background: 'transparent', fontSize: 10 }}>SKU</th>
+                                        <th style={{ ...th, background: 'transparent', fontSize: 10 }}>Deposit</th>
+                                        <th style={{ ...th, background: 'transparent', fontSize: 10 }}>At Pickup</th>
+                                        <th style={{ ...th, background: 'transparent', fontSize: 10 }}>Balance</th>
+                                        <th style={{ ...th, background: 'transparent', fontSize: 10 }}>Days</th>
+                                      </tr></thead>
+                                      <tbody>
+                                        {vPT.map(p => (
+                                          <tr key={p.id} style={{ borderBottom: '1px solid #e5e7eb' }}>
+                                            <td style={{ ...td, fontFamily: 'monospace', fontSize: 10 }}>{p.sku}</td>
+                                            <td style={{ ...td, textAlign: 'right' }}>{p.deposit_pct != null ? (p.deposit_pct * 100).toFixed(0) + '%' : '—'}</td>
+                                            <td style={{ ...td, textAlign: 'right' }}>{p.at_pickup_pct != null ? (p.at_pickup_pct * 100).toFixed(0) + '%' : '—'}</td>
+                                            <td style={{ ...td, textAlign: 'right' }}>{p.balance_pct != null ? (p.balance_pct * 100).toFixed(0) + '%' : '—'}</td>
+                                            <td style={{ ...td, textAlign: 'right', color: '#6b7280' }}>{p.balance_days ?? '—'}</td>
+                                          </tr>
+                                        ))}
+                                      </tbody>
+                                    </table>
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        )
+                      })}
+                    </div>
+                  )}
+                </div>
+              )
+            })}
           </div>
         )}
 
