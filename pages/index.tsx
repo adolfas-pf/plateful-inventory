@@ -171,6 +171,7 @@ export default function Home() {
   const [fcastReason, setFcastReason] = useState('')
   const [fcastSaving, setFcastSaving] = useState(false)
   const [dashWarehouse, setDashWarehouse] = useState<string>('All')
+  const [unitsWarehouse, setUnitsWarehouse] = useState<string>('All')
   const [filterSku, setFilterSku] = useState('all')
   const [filterStatus, setFilterStatus] = useState('active')
   const [searchOrder, setSearchOrder] = useState('')
@@ -491,9 +492,12 @@ export default function Home() {
         {/* ══ UNITS ══ */}
         {!loading&&tab==='units'&&(
           <div>
-            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:20}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
               <h2 style={{fontSize:15,fontWeight:600,margin:0}}>Inventory Projection</h2>
-              <span style={{fontSize:12,color:'#9ca3af'}}>Current stock depleted by weekly demand forecast · Green = TO arrival week · Red = stockout</span>
+              <span style={{fontSize:12,color:'#9ca3af'}}>Stock depleted by weekly demand · Green = TO arrival · Red = stockout</span>
+            </div>
+            <div style={{display:'flex',gap:2,background:'#f3f4f6',borderRadius:8,padding:3,marginBottom:16,width:'fit-content'}}>
+              {['All','KSNJ','KSCA','Amazon'].map(wh=><button key={wh} onClick={()=>setUnitsWarehouse(wh)} style={{padding:'5px 16px',borderRadius:6,border:'none',cursor:'pointer',background:unitsWarehouse===wh?'#fff':'transparent',fontWeight:unitsWarehouse===wh?600:400,fontSize:12,color:unitsWarehouse===wh?'#111':'#6b7280',boxShadow:unitsWarehouse===wh?'0 1px 3px rgba(0,0,0,0.1)':'none'}}>{wh}</button>)}
             </div>
             {FUNNELS_FORECAST.map(funnel=>{
               const fConfigs=skuConfig.filter(c=>c.funnel===funnel);if(!fConfigs.length)return null
@@ -524,10 +528,15 @@ export default function Home() {
                             const avgWeekly=sku?.avg_weekly_sales??0
                             
                             // Calculate running inventory
-                            let runningStock=curStock
-                            const weeklyProjections: {week:string,stock:number,demand:number,toArrival:number}[]=[]
+                            // Use BOW data from spreadsheet as the source of truth where available
+                            // Fall back to current stock - cumulative demand calculation
+                            let runningStock=getBOW(cfg.sku,weeks[0],unitsWarehouse)??curStock
+                            const weeklyProjections: {week:string,stock:number,demand:number,toArrival:number,fromBOW:boolean}[]=[]
                             
                             for(const week of weeks){
+                              // First check if we have BOW data for this week
+                              const bowVal=getBOW(cfg.sku,week,unitsWarehouse)
+                              
                               // Demand this week: from units_forecast if available, else calc from revenue
                               const unitFcst=unitsData.find(u=>u.sku===cfg.sku&&u.week_start===week)
                               const fw=fwData.find(r=>r.week_start===week&&r.channel==='DTC'&&r.funnel===funnel)
@@ -545,8 +554,13 @@ export default function Home() {
                                 t.status!=='Cancelled'
                               ).reduce((s,t)=>s+(t.qty||0),0)
                               
-                              runningStock=runningStock-demand+toArrival
-                              weeklyProjections.push({week,stock:runningStock,demand,toArrival})
+                              // Use BOW from spreadsheet if available, otherwise calculate
+                              if(bowVal!=null){
+                                runningStock=bowVal
+                              } else {
+                                runningStock=runningStock-demand+toArrival
+                              }
+                              weeklyProjections.push({week,stock:runningStock,demand,toArrival,fromBOW:bowVal!=null})
                             }
                             
                             return(
@@ -554,9 +568,9 @@ export default function Home() {
                                 <td style={{...td,fontWeight:600,position:'sticky',left:0,background:'#fff',zIndex:5,borderRight:'1px solid #e5e7eb'}}>
                                   <span style={{fontFamily:'monospace',fontSize:10,background:'#f3f4f6',padding:'2px 6px',borderRadius:4}}>{cfg.sku}</span>
                                 </td>
-                                <td style={{...td,fontWeight:600}}>{curStock.toLocaleString()}</td>
+                                <td style={{...td,fontWeight:600}}>{(getBOW(cfg.sku,TODAY_STR,unitsWarehouse)??curStock).toLocaleString()}</td>
                                 <td style={{...td,color:'#6b7280'}}>{avgWeekly?avgWeekly.toLocaleString():'—'}</td>
-                                {weeklyProjections.map(({week,stock,demand,toArrival})=>{
+                                {weeklyProjections.map(({week,stock,demand,toArrival,fromBOW})=>{
                                   const isStockout=stock<=0
                                   const isLow=stock>0&&avgWeekly>0&&stock<avgWeekly*2
                                   const hasTO=toArrival>0
