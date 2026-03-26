@@ -348,8 +348,10 @@ export default function Home() {
                 <button onClick={()=>{setShowStockLog(true);fetchStockLog()}} style={{fontSize:12,color:'#6b7280',background:'none',border:'1px solid #e5e7eb',borderRadius:6,padding:'4px 10px',cursor:'pointer'}}>Change Log</button>
               </div>
             </div>
-            <div style={{display:'flex',gap:2,background:'#f3f4f6',borderRadius:8,padding:3,marginBottom:16,width:'fit-content'}}>
-              {['All','KSNJ','KSCA','Amazon'].map(wh=><button key={wh} onClick={()=>setDashWarehouse(wh)} style={{padding:'5px 16px',borderRadius:6,border:'none',cursor:'pointer',background:dashWarehouse===wh?'#fff':'transparent',fontWeight:dashWarehouse===wh?600:400,fontSize:12,color:dashWarehouse===wh?'#111':'#6b7280',boxShadow:dashWarehouse===wh?'0 1px 3px rgba(0,0,0,0.1)':'none'}}>{wh}</button>)}
+            <div style={{position:'sticky',top:96,zIndex:40,background:'#f9fafb',paddingTop:4,paddingBottom:8}}>
+              <div style={{display:'flex',gap:2,background:'#f3f4f6',borderRadius:8,padding:3,width:'fit-content'}}>
+                {['All','KSNJ','KSCA','Amazon'].map(wh=><button key={wh} onClick={()=>setDashWarehouse(wh)} style={{padding:'5px 16px',borderRadius:6,border:'none',cursor:'pointer',background:dashWarehouse===wh?'#fff':'transparent',fontWeight:dashWarehouse===wh?600:400,fontSize:12,color:dashWarehouse===wh?'#111':'#6b7280',boxShadow:dashWarehouse===wh?'0 1px 3px rgba(0,0,0,0.1)':'none'}}>{wh}</button>)}
+              </div>
             </div>
             {FUNNEL_ORDER.map(funnel=>{
               const fskus=skusByFunnel[funnel]||[];if(!fskus.length)return null
@@ -496,8 +498,10 @@ export default function Home() {
               <h2 style={{fontSize:15,fontWeight:600,margin:0}}>Inventory Projection</h2>
               <span style={{fontSize:12,color:'#9ca3af'}}>Stock depleted by weekly demand · Green = TO arrival · Red = stockout</span>
             </div>
-            <div style={{display:'flex',gap:2,background:'#f3f4f6',borderRadius:8,padding:3,marginBottom:16,width:'fit-content'}}>
-              {['All','KSNJ','KSCA','Amazon'].map(wh=><button key={wh} onClick={()=>setUnitsWarehouse(wh)} style={{padding:'5px 16px',borderRadius:6,border:'none',cursor:'pointer',background:unitsWarehouse===wh?'#fff':'transparent',fontWeight:unitsWarehouse===wh?600:400,fontSize:12,color:unitsWarehouse===wh?'#111':'#6b7280',boxShadow:unitsWarehouse===wh?'0 1px 3px rgba(0,0,0,0.1)':'none'}}>{wh}</button>)}
+            <div style={{position:'sticky',top:96,zIndex:40,background:'#f9fafb',paddingTop:4,paddingBottom:8}}>
+              <div style={{display:'flex',gap:2,background:'#f3f4f6',borderRadius:8,padding:3,width:'fit-content'}}>
+                {['All','KSNJ','KSCA','Amazon'].map(wh=><button key={wh} onClick={()=>setUnitsWarehouse(wh)} style={{padding:'5px 16px',borderRadius:6,border:'none',cursor:'pointer',background:unitsWarehouse===wh?'#fff':'transparent',fontWeight:unitsWarehouse===wh?600:400,fontSize:12,color:unitsWarehouse===wh?'#111':'#6b7280',boxShadow:unitsWarehouse===wh?'0 1px 3px rgba(0,0,0,0.1)':'none'}}>{wh}</button>)}
+              </div>
             </div>
             {FUNNELS_FORECAST.map(funnel=>{
               const fConfigs=skuConfig.filter(c=>c.funnel===funnel);if(!fConfigs.length)return null
