@@ -90,9 +90,11 @@ const daysColor = (d: number|null) => d==null ? '#6b7280' : d<=14 ? '#dc2626' : 
 
 // Persist collapsed state in sessionStorage
 const loadCollapsed = (key: string): Set<string> => {
+  if (typeof window === 'undefined') return new Set()
   try { const v = sessionStorage.getItem(key); return v ? new Set(JSON.parse(v)) : new Set() } catch { return new Set() }
 }
 const saveCollapsed = (key: string, s: Set<string>) => {
+  if (typeof window === 'undefined') return
   try { sessionStorage.setItem(key, JSON.stringify([...s])) } catch {}
 }
 
