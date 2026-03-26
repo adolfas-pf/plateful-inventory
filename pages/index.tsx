@@ -528,9 +528,9 @@ export default function Home() {
                             const avgWeekly=sku?.avg_weekly_sales??0
                             
                             // Calculate running inventory
-                            // Use BOW data from spreadsheet as the source of truth where available
-                            // Fall back to current stock - cumulative demand calculation
-                            let runningStock=getBOW(cfg.sku,weeks[0],unitsWarehouse)??curStock
+                            // Start from BOW at 2026-03-23 for the selected warehouse
+                            const startStock=getBOW(cfg.sku,'2026-03-23',unitsWarehouse)??curStock
+                            let runningStock=startStock
                             const weeklyProjections: {week:string,stock:number,demand:number,toArrival:number,fromBOW:boolean}[]=[]
                             
                             for(const week of weeks){
@@ -568,7 +568,7 @@ export default function Home() {
                                 <td style={{...td,fontWeight:600,position:'sticky',left:0,background:'#fff',zIndex:5,borderRight:'1px solid #e5e7eb'}}>
                                   <span style={{fontFamily:'monospace',fontSize:10,background:'#f3f4f6',padding:'2px 6px',borderRadius:4}}>{cfg.sku}</span>
                                 </td>
-                                <td style={{...td,fontWeight:600}}>{(getBOW(cfg.sku,TODAY_STR,unitsWarehouse)??curStock).toLocaleString()}</td>
+                                <td style={{...td,fontWeight:600}}>{(getBOW(cfg.sku,'2026-03-23',unitsWarehouse)??curStock).toLocaleString()}</td>
                                 <td style={{...td,color:'#6b7280'}}>{avgWeekly?avgWeekly.toLocaleString():'—'}</td>
                                 {weeklyProjections.map(({week,stock,demand,toArrival,fromBOW})=>{
                                   const isStockout=stock<=0
