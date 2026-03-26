@@ -110,7 +110,7 @@ function useCollapsed(key: string): [Set<string>, (k: string) => void] {
 }
 
 export default function Home() {
-  const [tab, setTab] = useState<Tab>(() => (sessionStorage.getItem('activeTab') as Tab) || 'dashboard')
+  const [tab, setTab] = useState<Tab>('forecast')
   const [skus, setSkus] = useState<SKU[]>([])
   const [orders, setOrders] = useState<BacklogOrder[]>([])
   const [transfers, setTransfers] = useState<TransferOrder[]>([])
@@ -166,7 +166,7 @@ export default function Home() {
   const [filterStatus, setFilterStatus] = useState('active')
   const [searchOrder, setSearchOrder] = useState('')
 
-  const switchTab = (t: Tab) => { sessionStorage.setItem('activeTab', t); setTab(t) }
+  const switchTab = (t: Tab) => { if (typeof window !== 'undefined') { try { sessionStorage.setItem('activeTab', t) } catch {} }; setTab(t) }
 
   useEffect(() => { fetchAll() }, [])
 
