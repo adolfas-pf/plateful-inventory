@@ -174,6 +174,12 @@ export default function Home() {
   const [editingASP, setEditingASP] = useState<{sku:string,field:'asp_dtc'|'dtc_mix_pct',label:string}|null>(null)
   const [aspNewVal, setAspNewVal] = useState('')
   const [aspSaving, setAspSaving] = useState(false)
+  const [editingPT, setEditingPT] = useState<VendorPaymentTerms|null>(null)
+  const [ptEdits, setPtEdits] = useState<Partial<VendorPaymentTerms>>({})
+  const [ptSaving, setPtSaving] = useState(false)
+  const [editingLeadTime, setEditingLeadTime] = useState<{sku:string,days:number}|null>(null)
+  const [leadTimeVal, setLeadTimeVal] = useState('')
+  const [leadTimeSaving, setLeadTimeSaving] = useState(false)
   const [dashWarehouse, setDashWarehouse] = useState<string>('All')
   const [scenario, setScenario] = useState<'realistic'|'best'|'worst'>(() => {
     if(typeof window==='undefined')return'realistic'
@@ -225,8 +231,15 @@ export default function Home() {
     if(!editTO||!toEditComment.trim())return;setToEditSaving(true)
     const fields:Array<keyof TransferOrder>=['sku','qty','pick_up_date','eta_destination','shipping_method','status','destination','to_number']
     const logs:any[]=[]
-    for(const f of fields){if(toEdits[f]!==undefined&&String(toEdits[f])!==String((editTO as any)[f]??''))logs.push({to_id:editTO.id,field_changed:f,previous_value:String((editTO as any)[f]??''),new_value:String(toEdits[f]),comment:toEditComment})}
-    if(logs.length){await supabase.from('to_changelog').insert(logs);await supabase.from('transfer_orders').update(toEdits).eq('id',editTO.id)}
+    for(const f of fields){
+      const oldVal=String((editTO as any)[f]??'').split('T')[0] // strip time component
+      const newVal=String(toEdits[f]??'').split('T')[0]
+      if(toEdits[f]!==undefined&&newVal!==oldVal)
+        logs.push({to_id:editTO.id,field_changed:f,previous_value:oldVal,new_value:newVal,comment:toEditComment})
+    }
+    // Always save - don't gate on logs.length
+    await supabase.from('transfer_orders').update(toEdits).eq('id',editTO.id)
+    if(logs.length) await supabase.from('to_changelog').insert(logs)
     setEditTO(null);setToEdits({});setToEditComment('');setToEditSaving(false);fetchAll()
   }
 
@@ -264,6 +277,18 @@ export default function Home() {
       await supabase.from('forecast_weekly').insert({week_start:week,channel,funnel,scenario:isFuture(week)?scenario:'realistic',[field]:newVal})
     }
     setEditFcast(null);setFcastNewVal('');setFcastReason('');setFcastSaving(false);fetchAll()
+  }
+
+  async function savePT() {
+    if(!editingPT)return;setPtSaving(true)
+    await supabase.from('vendor_payment_terms').update(ptEdits).eq('id',editingPT.id)
+    setEditingPT(null);setPtEdits({});setPtSaving(false);fetchAll()
+  }
+
+  async function saveLeadTime() {
+    if(!editingLeadTime)return;setLeadTimeSaving(true)
+    await supabase.from('sku_unit_economics').update({production_lead_time_days:parseInt(leadTimeVal)}).eq('sku',editingLeadTime.sku)
+    setEditingLeadTime(null);setLeadTimeVal('');setLeadTimeSaving(false);fetchAll()
   }
 
   async function saveASPEdit() {
@@ -988,25 +1013,36 @@ export default function Home() {
                       </div>
                       {vPT.length>0&&(
                         <>
-                          <div style={{fontSize:11,fontWeight:700,textTransform:'uppercase',color:'#6b7280',marginBottom:8}}>Payment Terms by SKU</div>
+                          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
+                            <div style={{fontSize:11,fontWeight:700,textTransform:'uppercase',color:'#6b7280'}}>Payment Terms by SKU</div>
+                          </div>
                           <table style={{width:'100%',borderCollapse:'collapse',fontSize:12}}>
                             <thead><tr>
                               <th style={th}>SKU</th>
-                              <th style={{...th,textAlign:'right' as const}}>Deposit</th>
-                              <th style={{...th,textAlign:'right' as const}}>At Pickup</th>
-                              <th style={{...th,textAlign:'right' as const}}>Balance</th>
-                              <th style={{...th,textAlign:'right' as const}}>Balance due</th>
-                              <th style={{...th,textAlign:'right' as const}}>Days after pickup</th>
+                              <th style={th}>Lead Time</th>
+                              <th style={{...th,textAlign:'right' as const}}>Deposit %</th>
+                              <th style={{...th,textAlign:'right' as const}}>At Pickup %</th>
+                              <th style={{...th,textAlign:'right' as const}}>Balance %</th>
+                              <th style={{...th,textAlign:'right' as const}}>Balance due (days after pickup)</th>
+                              <th style={th}></th>
                             </tr></thead>
-                            <tbody>{vPT.map(p=>(
+                            <tbody>{vPT.map(p=>{
+                              const ue=ueData.find(r=>r.sku===p.sku)
+                              return(
                               <tr key={p.id} style={{borderBottom:'1px solid #f3f4f6'}}>
                                 <td style={td}><span style={{fontFamily:'monospace',fontSize:11,background:'#f3f4f6',padding:'2px 6px',borderRadius:4,cursor:'pointer',color:'#2563eb'}} onClick={()=>switchTab('ue')}>{p.sku}</span></td>
+                                <td style={td}>
+                                  <span onClick={()=>{setEditingLeadTime({sku:p.sku,days:ue?.production_lead_time_days||0});setLeadTimeVal(String(ue?.production_lead_time_days||''))}} style={{cursor:'pointer',color:'#2563eb',borderBottom:'1px dashed #93c5fd'}}>
+                                    {ue?.production_lead_time_days?ue.production_lead_time_days+'d':'— ✎'}
+                                  </span>
+                                </td>
                                 <td style={{...td,textAlign:'right' as const}}>{p.deposit_pct!=null?(p.deposit_pct*100).toFixed(0)+'%':'—'}</td>
                                 <td style={{...td,textAlign:'right' as const}}>{p.at_pickup_pct!=null?(p.at_pickup_pct*100).toFixed(0)+'%':'—'}</td>
                                 <td style={{...td,textAlign:'right' as const}}>{p.balance_pct!=null?(p.balance_pct*100).toFixed(0)+'%':'—'}</td>
-                                <td style={{...td,textAlign:'right' as const,color:'#6b7280'}}>{p.balance_days??'—'}</td>
+                                <td style={{...td,textAlign:'right' as const,color:'#6b7280'}}>{p.balance_days!=null?p.balance_days+' days':'—'}</td>
+                                <td style={td}><button onClick={()=>{setEditingPT(p);setPtEdits({deposit_pct:p.deposit_pct,at_pickup_pct:p.at_pickup_pct,balance_pct:p.balance_pct,balance_days:p.balance_days})}} style={{fontSize:10,padding:'2px 7px',border:'1px solid #e5e7eb',borderRadius:4,cursor:'pointer',background:'#fff',color:'#6b7280'}}>Edit</button></td>
                               </tr>
-                            ))}</tbody>
+                            )})}</tbody>
                           </table>
                         </>
                       )}
@@ -1204,6 +1240,45 @@ export default function Home() {
                 <div style={{fontSize:12,color:'#6b7280',fontStyle:'italic'}}>{c.reason}</div>
               </div>
             ))}
+          </div>
+        </div>
+      )}
+
+      {editingPT&&(
+        <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.4)',display:'flex',alignItems:'center',justifyContent:'center',zIndex:100}}>
+          <div style={{background:'#fff',borderRadius:12,padding:28,width:420,boxShadow:'0 20px 60px rgba(0,0,0,0.15)'}}>
+            <h3 style={{fontSize:16,fontWeight:700,marginBottom:4}}>Edit Payment Terms</h3>
+            <p style={{fontSize:12,color:'#9ca3af',marginBottom:20}}>{editingPT.sku} · {editingPT.factory||'—'}</p>
+            {([
+              {label:'Deposit % (e.g. 0.30 for 30%)',field:'deposit_pct',step:'0.01'},
+              {label:'At Pickup % (e.g. 0.70 for 70%)',field:'at_pickup_pct',step:'0.01'},
+              {label:'Balance % (e.g. 0 if fully paid at pickup)',field:'balance_pct',step:'0.01'},
+              {label:'Balance due — days after pickup',field:'balance_days',step:'1'},
+            ] as any[]).map(({label,field,step})=>(
+              <div key={field} style={{marginBottom:12}}>
+                <label style={{fontSize:12,fontWeight:500,display:'block',marginBottom:4}}>{label}</label>
+                <input type="number" step={step} value={(ptEdits as any)[field]??''} onChange={e=>setPtEdits(p=>({...p,[field]:parseFloat(e.target.value)||0}))} style={{width:'100%',padding:'7px 10px',border:'1px solid #e5e7eb',borderRadius:6,fontSize:13,boxSizing:'border-box'}} />
+              </div>
+            ))}
+            <div style={{display:'flex',gap:10,marginTop:8}}>
+              <button onClick={()=>setEditingPT(null)} style={{flex:1,padding:'9px 0',border:'1px solid #e5e7eb',borderRadius:8,cursor:'pointer',background:'#fff',fontSize:14}}>Cancel</button>
+              <button onClick={savePT} disabled={ptSaving} style={{flex:1,padding:'9px 0',border:'none',borderRadius:8,cursor:'pointer',background:'#111',color:'#fff',fontSize:14,fontWeight:600}}>{ptSaving?'Saving...':'Save'}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {editingLeadTime&&(
+        <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.4)',display:'flex',alignItems:'center',justifyContent:'center',zIndex:100}}>
+          <div style={{background:'#fff',borderRadius:12,padding:28,width:360,boxShadow:'0 20px 60px rgba(0,0,0,0.15)'}}>
+            <h3 style={{fontSize:16,fontWeight:700,marginBottom:4}}>Edit Production Lead Time</h3>
+            <p style={{fontSize:12,color:'#9ca3af',marginBottom:20}}>{editingLeadTime.sku}</p>
+            <label style={{fontSize:12,fontWeight:500,display:'block',marginBottom:6}}>Days from order to pickup</label>
+            <input type="number" value={leadTimeVal} onChange={e=>setLeadTimeVal(e.target.value)} style={{width:'100%',padding:'8px 12px',border:'1px solid #e5e7eb',borderRadius:8,fontSize:14,marginBottom:20,boxSizing:'border-box'}} />
+            <div style={{display:'flex',gap:10}}>
+              <button onClick={()=>setEditingLeadTime(null)} style={{flex:1,padding:'9px 0',border:'1px solid #e5e7eb',borderRadius:8,cursor:'pointer',background:'#fff',fontSize:14}}>Cancel</button>
+              <button onClick={saveLeadTime} disabled={leadTimeSaving} style={{flex:1,padding:'9px 0',border:'none',borderRadius:8,cursor:'pointer',background:'#111',color:'#fff',fontSize:14,fontWeight:600}}>{leadTimeSaving?'Saving...':'Save'}</button>
+            </div>
           </div>
         </div>
       )}
