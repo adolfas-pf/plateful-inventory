@@ -121,7 +121,6 @@ export default function Home() {
   const [unitsData, setUnitsData] = useState<UnitsWeekly[]>([])
   const [vendors, setVendors] = useState<Vendor[]>([])
   const [payTerms, setPayTerms] = useState<PaymentTerms[]>([])
-  const [skuMappings, setSkuMappings] = useState<{shopify_sku:string,db_sku:string,multiplier:number}[]>([])
   const [toComments, setToComments] = useState<TOComment[]>([])
   const [skuComments, setSkuComments] = useState<SKUComment[]>([])
   const [bowData, setBowData] = useState<BOW[]>([])
@@ -182,10 +181,6 @@ export default function Home() {
   })
   const [unitsWarehouse, setUnitsWarehouse] = useState<string>('All')
   const [filterSku, setFilterSku] = useState('all')
-  const [chatOpen, setChatOpen] = useState(false)
-  const [chatMessages, setChatMessages] = useState<{role:'user'|'assistant',content:string}[]>([])
-  const [chatInput, setChatInput] = useState('')
-  const [chatLoading, setChatLoading] = useState(false)
   const [filterStatus, setFilterStatus] = useState('active')
   const [searchOrder, setSearchOrder] = useState('')
 
@@ -193,7 +188,7 @@ export default function Home() {
 
   async function fetchAll() {
     setLoading(true)
-    const [a,b,c,d,e,f,g,h,i,j,k,l,m,n] = await Promise.all([
+    const [a,b,c,d,e,f,g,h,i,j,k,l,m] = await Promise.all([
       supabase.from('skus').select('*').order('name'),
       supabase.from('backlog_orders').select('*').order('order_date'),
       supabase.from('transfer_orders').select('*').order('eta_destination'),
@@ -207,61 +202,13 @@ export default function Home() {
       supabase.from('to_comments').select('*').order('created_at'),
       supabase.from('sku_comments').select('*').order('created_at'),
       supabase.from('inventory_bow').select('*').order('week_start'),
-      supabase.from('sku_mapping').select('shopify_sku,db_sku,multiplier'),
     ])
     if(a.data)setSkus(a.data); if(b.data)setOrders(b.data); if(c.data)setTransfers(c.data)
     if(d.data)setUeData(d.data); if(e.data)setFwData(e.data); if(f.data)setFdData(f.data)
     if(g.data)setSkuConfig(g.data); if(h.data)setUnitsData(h.data); if(i.data)setVendors(i.data)
     if(j.data)setPayTerms(j.data); if(k.data)setToComments(k.data); if(l.data)setSkuComments(l.data)
-    if(m.data)setBowData(m.data); if(n.data)setSkuMappings(n.data)
+    if(m.data)setBowData(m.data)
     setLoading(false)
-  }
-
-  function buildChatContext() {
-    const stockoutSkus = skus.filter(s => s.current_stock === 0 || s.status === 'out')
-    const criticalSkus = skus.filter(s => s.status === 'critical')
-    const inboundTOs = transfers.filter(t => t.status === 'In Transfer')
-    const pendingTOs = transfers.filter(t => t.status === 'TO Pending')
-    return `
-CURRENT STOCK LEVELS (as of today):
-${skus.filter(s=>!s.hidden).map(s=>`${s.id}: ${s.current_stock.toLocaleString()} units (avg ${s.avg_weekly_sales}/wk, ~${s.avg_weekly_sales>0?Math.floor(s.current_stock/s.avg_weekly_sales*7):'?'} days left)`).join('\n')}
-
-STOCKOUTS (${stockoutSkus.length}): ${stockoutSkus.map(s=>s.id).join(', ') || 'None'}
-CRITICAL (<50 units) (${criticalSkus.length}): ${criticalSkus.map(s=>s.id).join(', ') || 'None'}
-
-INBOUND TRANSFER ORDERS (${inboundTOs.length} in transit):
-${inboundTOs.slice(0,10).map(t=>`${t.to_number||'?'}: ${t.sku} x${t.qty} → ${t.destination} ETA ${t.eta_destination||'?'}`).join('\n')}
-
-PENDING TOs (${pendingTOs.length}):
-${pendingTOs.slice(0,10).map(t=>`${t.to_number||'?'}: ${t.sku} x${t.qty} → ${t.destination}`).join('\n')}
-
-FUNNELS: Pans (TI_PAN_LID, TI_WOK_LID, TI_POT_LID, TI_SAUCE_LID, TI_UT_SPAT, TI_UT_SET), Cutting Boards (TI_BRD_S/M/L, BRD_STND), Jar Vacuum Sealer (MASON_VAC, MASON_LID_REG/WIDE, MASON_FUNNEL, MASON_LABEL), Bag Vacuum Sealer (BAG_VAC etc), Food Warming Mat (FWM_M_GRY/CRM/BLU_US)
-`.trim()
-  }
-
-  async function sendChat() {
-    if(!chatInput.trim()||chatLoading)return
-    const userMsg = {role:'user' as const, content: chatInput.trim()}
-    const newMessages = [...chatMessages, userMsg]
-    setChatMessages(newMessages)
-    setChatInput('')
-    setChatLoading(true)
-    try {
-      const res = await fetch('/api/chat', {
-        method:'POST',
-        headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({
-          messages: newMessages.map(m=>({role:m.role,content:m.content})),
-          context: buildChatContext()
-        })
-      })
-      const data = await res.json()
-      if(data.reply) setChatMessages(prev=>[...prev,{role:'assistant',content:data.reply}])
-      else setChatMessages(prev=>[...prev,{role:'assistant',content:'Error: '+( data.error||'Unknown error')}])
-    } catch(e:any) {
-      setChatMessages(prev=>[...prev,{role:'assistant',content:'Connection error: '+e.message}])
-    }
-    setChatLoading(false)
   }
 
   async function fetchStockLog() { const{data}=await supabase.from('stock_changelog').select('*').order('changed_at',{ascending:false}).limit(100);if(data)setStockLog(data) }
@@ -380,7 +327,7 @@ FUNNELS: Pans (TI_PAN_LID, TI_WOK_LID, TI_POT_LID, TI_SAUCE_LID, TI_UT_SPAT, TI_
       if(!shopifySku||requiresShipping==='false'){sk++;continue}
 
       // Map to canonical SKU
-      const mapping=skuMappings.find(m=>m.shopify_sku===shopifySku)
+      const mapping=([] as {shopify_sku:string,db_sku:string,multiplier:number}[]).find(m=>m.shopify_sku===shopifySku)
       const canonicalSku=mapping?mapping.db_sku:shopifySku
       const actualQty=mapping?qty*mapping.multiplier:qty
 
@@ -471,12 +418,7 @@ FUNNELS: Pans (TI_PAN_LID, TI_WOK_LID, TI_POT_LID, TI_SAUCE_LID, TI_UT_SPAT, TI_
           <span style={{fontWeight:700,fontSize:16}}>Plateful</span>
           <span style={{color:'#6b7280',fontSize:14}}>Operations</span>
         </div>
-        <div style={{display:'flex',alignItems:'center',gap:12}}>
-          <button onClick={()=>setChatOpen(o=>!o)} style={{display:'flex',alignItems:'center',gap:6,padding:'6px 14px',background:chatOpen?'#111':'#f3f4f6',border:'none',borderRadius:8,cursor:'pointer',color:chatOpen?'#fff':'#374151',fontSize:13,fontWeight:500}}>
-            💬 Ask AI
-          </button>
-          <button onClick={fetchAll} style={{background:'none',border:'none',cursor:'pointer',color:'#6b7280',fontSize:13}}>↻ Refresh</button>
-        </div>
+        <button onClick={fetchAll} style={{background:'none',border:'none',cursor:'pointer',color:'#6b7280',fontSize:13}}>↻ Refresh</button>
       </div>
       <div style={{...sticky,top:48,background:'#fff',borderBottom:'1px solid #e5e7eb',padding:'0 24px',display:'flex',gap:16}}>
         {(['dashboard','forecast','units','transfers','ue','vendors'] as Tab[]).map(t=>(
@@ -1262,58 +1204,6 @@ FUNNELS: Pans (TI_PAN_LID, TI_WOK_LID, TI_POT_LID, TI_SAUCE_LID, TI_UT_SPAT, TI_
                 <div style={{fontSize:12,color:'#6b7280',fontStyle:'italic'}}>{c.reason}</div>
               </div>
             ))}
-          </div>
-        </div>
-      )}
-      {/* ── Chat Panel ── */}
-      {chatOpen&&(
-        <div style={{position:'fixed',bottom:24,right:24,width:420,height:560,background:'#fff',borderRadius:16,boxShadow:'0 8px 40px rgba(0,0,0,0.18)',display:'flex',flexDirection:'column',zIndex:200,border:'1px solid #e5e7eb'}}>
-          <div style={{padding:'14px 16px',borderBottom:'1px solid #f3f4f6',display:'flex',alignItems:'center',justifyContent:'space-between',background:'#111',borderRadius:'16px 16px 0 0'}}>
-            <div style={{display:'flex',alignItems:'center',gap:8}}>
-              <span style={{fontSize:16}}>💬</span>
-              <span style={{fontWeight:700,fontSize:14,color:'#fff'}}>Plateful AI</span>
-              <span style={{fontSize:11,color:'#9ca3af',background:'rgba(255,255,255,0.1)',padding:'2px 6px',borderRadius:4}}>Powered by Claude</span>
-            </div>
-            <div style={{display:'flex',gap:8}}>
-              <button onClick={()=>setChatMessages([])} style={{background:'none',border:'none',cursor:'pointer',color:'#9ca3af',fontSize:11}}>Clear</button>
-              <button onClick={()=>setChatOpen(false)} style={{background:'none',border:'none',cursor:'pointer',color:'#9ca3af',fontSize:18,lineHeight:1}}>×</button>
-            </div>
-          </div>
-          <div style={{flex:1,overflowY:'auto',padding:'16px',display:'flex',flexDirection:'column',gap:10}}>
-            {chatMessages.length===0&&(
-              <div style={{color:'#9ca3af',fontSize:13,textAlign:'center',marginTop:40}}>
-                <div style={{fontSize:24,marginBottom:12}}>💬</div>
-                <div style={{fontWeight:500,marginBottom:6}}>Ask me anything about your inventory</div>
-                <div style={{fontSize:12}}>Try: "What's at risk of stocking out?" or "When does TI_PAN_LID run out?"</div>
-                <div style={{display:'flex',flexDirection:'column',gap:6,marginTop:16}}>
-                  {["What SKUs are at stockout risk?","Which TOs are arriving this week?","How many days of TI_BRD_S do we have left?"].map(q=>(
-                    <button key={q} onClick={()=>{setChatInput(q)}} style={{padding:'8px 12px',background:'#f3f4f6',border:'1px solid #e5e7eb',borderRadius:8,cursor:'pointer',fontSize:12,color:'#374151',textAlign:'left'}}>{q}</button>
-                  ))}
-                </div>
-              </div>
-            )}
-            {chatMessages.map((m,i)=>(
-              <div key={i} style={{display:'flex',justifyContent:m.role==='user'?'flex-end':'flex-start'}}>
-                <div style={{maxWidth:'80%',padding:'10px 14px',borderRadius:m.role==='user'?'16px 16px 4px 16px':'16px 16px 16px 4px',background:m.role==='user'?'#111':'#f3f4f6',color:m.role==='user'?'#fff':'#111',fontSize:13,lineHeight:1.5,whiteSpace:'pre-wrap'}}>
-                  {m.content}
-                </div>
-              </div>
-            ))}
-            {chatLoading&&(
-              <div style={{display:'flex',justifyContent:'flex-start'}}>
-                <div style={{padding:'10px 14px',background:'#f3f4f6',borderRadius:'16px 16px 16px 4px',fontSize:13,color:'#9ca3af'}}>Thinking...</div>
-              </div>
-            )}
-          </div>
-          <div style={{padding:'12px',borderTop:'1px solid #f3f4f6',display:'flex',gap:8}}>
-            <input
-              value={chatInput}
-              onChange={e=>setChatInput(e.target.value)}
-              onKeyDown={e=>e.key==='Enter'&&!e.shiftKey&&(e.preventDefault(),sendChat())}
-              placeholder="Ask about inventory, stockouts, TOs..."
-              style={{flex:1,padding:'9px 12px',border:'1px solid #e5e7eb',borderRadius:10,fontSize:13,outline:'none'}}
-            />
-            <button onClick={sendChat} disabled={!chatInput.trim()||chatLoading} style={{padding:'9px 16px',background:chatInput.trim()&&!chatLoading?'#111':'#d1d5db',border:'none',borderRadius:10,cursor:chatInput.trim()&&!chatLoading?'pointer':'default',color:'#fff',fontSize:13,fontWeight:600}}>Send</button>
           </div>
         </div>
       )}
