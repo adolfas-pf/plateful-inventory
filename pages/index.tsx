@@ -488,15 +488,13 @@ export default function Home() {
         {!loading&&tab==='units'&&(
           <div>
             <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:20}}>
-              <h2 style={{fontSize:15,fontWeight:600,margin:0}}>Units Forecast</h2>
-              <span style={{fontSize:12,color:'#9ca3af'}}>Black = actuals · Blue = revenue forecast × split ÷ ASP</span>
+              <h2 style={{fontSize:15,fontWeight:600,margin:0}}>Inventory Projection</h2>
+              <span style={{fontSize:12,color:'#9ca3af'}}>Current stock depleted by weekly demand forecast · Green = TO arrival week · Red = stockout</span>
             </div>
             {FUNNELS_FORECAST.map(funnel=>{
               const fConfigs=skuConfig.filter(c=>c.funnel===funnel);if(!fConfigs.length)return null
               const c=collUnits.has(funnel)
-              const weeks=[...new Set(fwData.map(r=>r.week_start))].sort()
-              const past=weeks.filter(w=>!isFuture(w)).slice(-6);const future=weeks.filter(w=>isFuture(w)).slice(0,8)
-              const allW=[...past,...future]
+              const weeks=[...new Set(fwData.map(r=>r.week_start))].filter(w=>w>=TODAY_STR).sort().slice(0,36)
               return(
                 <div key={funnel} style={{marginBottom:16}}>
                   {fBar(c,()=>togUnits(funnel),funnel,fConfigs.length)}
@@ -505,28 +503,70 @@ export default function Home() {
                       <table style={{borderCollapse:'collapse',fontSize:12,minWidth:600}}>
                         <thead><tr style={{background:'#f9fafb'}}>
                           <th style={{...th,width:140,position:'sticky',left:0,background:'#f9fafb',zIndex:10}}>SKU</th>
-                          <th style={{...th,width:65}}>ASP</th>
-                          <th style={{...th,width:60}}>Split%</th>
-                          {allW.map(w=>{const fut=isFuture(w);return<th key={w} style={{...th,textAlign:'center',background:fut?'#eff6ff':'#f9fafb',borderLeft:'2px solid #e5e7eb',minWidth:70}}><span style={{color:fut?'#2563eb':'#374151'}}>{fmtDate(w)}</span></th>})}
+                          <th style={{...th,width:65}}>Now</th>
+                          <th style={{...th,width:65}}>Avg/Wk</th>
+                          {weeks.map(w=>{
+                            const fut=isFuture(w)
+                            // Check if any TO arrives this week for this funnel
+                            return<th key={w} style={{...th,textAlign:'center',background:fut?'#eff6ff':'#f9fafb',borderLeft:'2px solid #e5e7eb',minWidth:70}}>
+                              <span style={{color:fut?'#2563eb':'#374151'}}>{fmtDate(w)}</span>
+                            </th>
+                          })}
                         </tr></thead>
                         <tbody>
-                          {fConfigs.map(cfg=>(
-                            <tr key={cfg.sku} style={{borderBottom:'1px solid #f3f4f6'}}>
-                              <td style={{...td,fontWeight:600,position:'sticky',left:0,background:'#fff',zIndex:5,borderRight:'1px solid #e5e7eb'}}><span style={{fontFamily:'monospace',fontSize:10,background:'#f3f4f6',padding:'2px 6px',borderRadius:4}}>{cfg.sku}</span></td>
-                              <td style={{...td,color:'#6b7280'}}>${cfg.asp_dtc?.toFixed(0)??'—'}</td>
-                              <td style={{...td,color:'#6b7280'}}>{cfg.dtc_mix_pct!=null?(cfg.dtc_mix_pct*100).toFixed(1)+'%':'—'}</td>
-                              {allW.map(w=>{
-                                const fut=isFuture(w)
-                                const actual=unitsData.find(u=>u.sku===cfg.sku&&u.week_start===w)?.units_actual
-                                const fw=fwData.find(r=>r.week_start===w&&r.channel==='DTC'&&r.funnel===funnel)
-                                const calc=(fw?.sales_forecast!=null&&cfg.dtc_mix_pct!=null&&cfg.asp_dtc)?Math.round(fw.sales_forecast*cfg.dtc_mix_pct/cfg.asp_dtc):null
-                                const display=actual??calc;const isActual=actual!=null
-                                return<td key={w} style={{...td,textAlign:'right' as const,borderLeft:'2px solid #e5e7eb',color:isActual?'#374151':'#2563eb',fontWeight:isActual?400:500,background:fut&&!isActual?'#eff6ff':'transparent'}}>
-                                  {display!=null?display.toLocaleString():<span style={{color:'#d1d5db'}}>—</span>}
+                          {fConfigs.map(cfg=>{
+                            const sku=skus.find(s=>s.id===cfg.sku)
+                            const curStock=sku?.current_stock??0
+                            const avgWeekly=sku?.avg_weekly_sales??0
+                            
+                            // Calculate running inventory
+                            let runningStock=curStock
+                            const weeklyProjections: {week:string,stock:number,demand:number,toArrival:number}[]=[]
+                            
+                            for(const week of weeks){
+                              // Demand this week: from units_forecast if available, else calc from revenue
+                              const unitFcst=unitsData.find(u=>u.sku===cfg.sku&&u.week_start===week)
+                              const fw=fwData.find(r=>r.week_start===week&&r.channel==='DTC'&&r.funnel===funnel)
+                              const calcDemand=(fw?.sales_forecast!=null&&cfg.dtc_mix_pct!=null&&cfg.asp_dtc)?
+                                Math.round(fw.sales_forecast*cfg.dtc_mix_pct/cfg.asp_dtc):
+                                (unitFcst?.units_forecast??Math.round(avgWeekly))
+                              const demand=unitFcst?.units_actual??calcDemand??0
+                              
+                              // TO arrivals this week
+                              const toArrival=transfers.filter(t=>
+                                t.sku===cfg.sku&&
+                                t.eta_destination&&
+                                t.eta_destination>=week&&
+                                t.eta_destination<(weeks[weeks.indexOf(week)+1]||'2099-01-01')&&
+                                t.status!=='Cancelled'
+                              ).reduce((s,t)=>s+(t.qty||0),0)
+                              
+                              runningStock=runningStock-demand+toArrival
+                              weeklyProjections.push({week,stock:runningStock,demand,toArrival})
+                            }
+                            
+                            return(
+                              <tr key={cfg.sku} style={{borderBottom:'1px solid #f3f4f6'}}>
+                                <td style={{...td,fontWeight:600,position:'sticky',left:0,background:'#fff',zIndex:5,borderRight:'1px solid #e5e7eb'}}>
+                                  <span style={{fontFamily:'monospace',fontSize:10,background:'#f3f4f6',padding:'2px 6px',borderRadius:4}}>{cfg.sku}</span>
                                 </td>
-                              })}
-                            </tr>
-                          ))}
+                                <td style={{...td,fontWeight:600}}>{curStock.toLocaleString()}</td>
+                                <td style={{...td,color:'#6b7280'}}>{avgWeekly?avgWeekly.toLocaleString():'—'}</td>
+                                {weeklyProjections.map(({week,stock,demand,toArrival})=>{
+                                  const isStockout=stock<=0
+                                  const isLow=stock>0&&avgWeekly>0&&stock<avgWeekly*2
+                                  const hasTO=toArrival>0
+                                  return<td key={week} style={{...td,textAlign:'right' as const,borderLeft:'2px solid #e5e7eb',
+                                    background:hasTO?'#dcfce7':isStockout?'#fee2e2':isLow?'#fef3c7':'transparent',
+                                    color:isStockout?'#dc2626':isLow?'#d97706':hasTO?'#15803d':'#374151',
+                                    fontWeight:isStockout||hasTO?600:400}}>
+                                    <div>{stock.toLocaleString()}</div>
+                                    {hasTO&&<div style={{fontSize:9,color:'#15803d'}}>+{toArrival.toLocaleString()}</div>}
+                                  </td>
+                                })}
+                              </tr>
+                            )
+                          })}
                         </tbody>
                       </table>
                     </div>
@@ -585,12 +625,15 @@ export default function Home() {
                             {/* TO Comments panel */}
                             {showTOComments===dn&&(
                               <div style={{padding:'12px 16px',background:'#fafafa',borderBottom:'1px solid #f3f4f6'}}>
-                                <div style={{fontSize:11,fontWeight:700,textTransform:'uppercase',color:'#6b7280',marginBottom:8}}>Shipment Comments</div>
+                                <div style={{fontSize:11,fontWeight:700,textTransform:'uppercase',color:'#6b7280',marginBottom:8}}>Shipment Comments — {dn}</div>
                                 {thisTOComments.length===0&&<div style={{fontSize:12,color:'#9ca3af',marginBottom:8}}>No comments yet.</div>}
                                 {thisTOComments.map(c=>(
-                                  <div key={c.id} style={{fontSize:12,padding:'6px 0',borderBottom:'1px solid #f3f4f6'}}>
-                                    <span style={{color:'#374151'}}>{c.comment}</span>
-                                    <span style={{color:'#9ca3af',marginLeft:8,fontSize:11}}>{fmtDateTime(c.created_at)}</span>
+                                  <div key={c.id} style={{fontSize:12,padding:'6px 0',borderBottom:'1px solid #f3f4f6',display:'flex',justifyContent:'space-between',alignItems:'flex-start'}}>
+                                    <div>
+                                      <span style={{color:'#374151'}}>{c.comment}</span>
+                                      <span style={{color:'#9ca3af',marginLeft:8,fontSize:11}}>{fmtDateTime(c.created_at)}</span>
+                                    </div>
+                                    <button onClick={async()=>{await supabase.from('to_comments').delete().eq('id',c.id);fetchAll()}} style={{fontSize:10,padding:'1px 6px',border:'1px solid #fecaca',borderRadius:4,cursor:'pointer',background:'#fff',color:'#dc2626',marginLeft:8,flexShrink:0}}>×</button>
                                   </div>
                                 ))}
                                 <div style={{display:'flex',gap:8,marginTop:10}}>
@@ -702,7 +745,7 @@ export default function Home() {
                                 {showSKUComment===row.sku&&(
                                   <tr><td colSpan={99} style={{padding:'10px 16px',background:'#fafafa',borderBottom:'1px solid #f3f4f6'}}>
                                     <div style={{fontSize:11,fontWeight:700,textTransform:'uppercase',color:'#6b7280',marginBottom:6}}>Notes — {row.sku}</div>
-                                    {thisSKUComments.map(c=><div key={c.id} style={{fontSize:12,padding:'4px 0',borderBottom:'1px solid #f3f4f6'}}><span style={{color:'#374151'}}>{c.comment}</span><span style={{color:'#9ca3af',marginLeft:8,fontSize:11}}>{fmtDateTime(c.created_at)}</span></div>)}
+                                    {thisSKUComments.map(c=><div key={c.id} style={{fontSize:12,padding:'4px 0',borderBottom:'1px solid #f3f4f6',display:'flex',justifyContent:'space-between',alignItems:'flex-start'}}><div><span style={{color:'#374151'}}>{c.comment}</span><span style={{color:'#9ca3af',marginLeft:8,fontSize:11}}>{fmtDateTime(c.created_at)}</span></div><button onClick={async()=>{await supabase.from('sku_comments').delete().eq('id',c.id);fetchAll()}} style={{fontSize:10,padding:'1px 6px',border:'1px solid #fecaca',borderRadius:4,cursor:'pointer',background:'#fff',color:'#dc2626',marginLeft:8,flexShrink:0}}>×</button></div>)}
                                     <div style={{display:'flex',gap:8,marginTop:8}}>
                                       <input value={newSKUComment} onChange={e=>setNewSKUComment(e.target.value)} placeholder="Add note..." style={{flex:1,padding:'6px 10px',border:'1px solid #e5e7eb',borderRadius:6,fontSize:12}} onKeyDown={e=>e.key==='Enter'&&addSKUComment(row.sku)} />
                                       <button onClick={()=>addSKUComment(row.sku)} disabled={!newSKUComment.trim()||addingSKUComment} style={{padding:'6px 14px',border:'none',borderRadius:6,background:'#111',color:'#fff',fontSize:12,cursor:'pointer'}}>Add</button>
