@@ -121,6 +121,7 @@ export default function Home() {
   const [unitsData, setUnitsData] = useState<UnitsWeekly[]>([])
   const [vendors, setVendors] = useState<Vendor[]>([])
   const [payTerms, setPayTerms] = useState<PaymentTerms[]>([])
+  const [skuMappings, setSkuMappings] = useState<{shopify_sku:string,db_sku:string,multiplier:number}[]>([])
   const [toComments, setToComments] = useState<TOComment[]>([])
   const [skuComments, setSkuComments] = useState<SKUComment[]>([])
   const [bowData, setBowData] = useState<BOW[]>([])
@@ -181,6 +182,10 @@ export default function Home() {
   })
   const [unitsWarehouse, setUnitsWarehouse] = useState<string>('All')
   const [filterSku, setFilterSku] = useState('all')
+  const [chatOpen, setChatOpen] = useState(false)
+  const [chatMessages, setChatMessages] = useState<{role:'user'|'assistant',content:string}[]>([])
+  const [chatInput, setChatInput] = useState('')
+  const [chatLoading, setChatLoading] = useState(false)
   const [filterStatus, setFilterStatus] = useState('active')
   const [searchOrder, setSearchOrder] = useState('')
 
@@ -188,7 +193,7 @@ export default function Home() {
 
   async function fetchAll() {
     setLoading(true)
-    const [a,b,c,d,e,f,g,h,i,j,k,l,m] = await Promise.all([
+    const [a,b,c,d,e,f,g,h,i,j,k,l,m,n] = await Promise.all([
       supabase.from('skus').select('*').order('name'),
       supabase.from('backlog_orders').select('*').order('order_date'),
       supabase.from('transfer_orders').select('*').order('eta_destination'),
@@ -207,8 +212,55 @@ export default function Home() {
     if(d.data)setUeData(d.data); if(e.data)setFwData(e.data); if(f.data)setFdData(f.data)
     if(g.data)setSkuConfig(g.data); if(h.data)setUnitsData(h.data); if(i.data)setVendors(i.data)
     if(j.data)setPayTerms(j.data); if(k.data)setToComments(k.data); if(l.data)setSkuComments(l.data)
-    if(m.data)setBowData(m.data)
+    if(m.data)setBowData(m.data); if(n.data)setSkuMappings(n.data)
     setLoading(false)
+  }
+
+  function buildChatContext() {
+    const stockoutSkus = skus.filter(s => s.current_stock === 0 || s.status === 'out')
+    const criticalSkus = skus.filter(s => s.status === 'critical')
+    const inboundTOs = transfers.filter(t => t.status === 'In Transfer')
+    const pendingTOs = transfers.filter(t => t.status === 'TO Pending')
+    return `
+CURRENT STOCK LEVELS (as of today):
+${skus.filter(s=>!s.hidden).map(s=>`${s.id}: ${s.current_stock.toLocaleString()} units (avg ${s.avg_weekly_sales}/wk, ~${s.avg_weekly_sales>0?Math.floor(s.current_stock/s.avg_weekly_sales*7):'?'} days left)`).join('\n')}
+
+STOCKOUTS (${stockoutSkus.length}): ${stockoutSkus.map(s=>s.id).join(', ') || 'None'}
+CRITICAL (<50 units) (${criticalSkus.length}): ${criticalSkus.map(s=>s.id).join(', ') || 'None'}
+
+INBOUND TRANSFER ORDERS (${inboundTOs.length} in transit):
+${inboundTOs.slice(0,10).map(t=>`${t.to_number||'?'}: ${t.sku} x${t.qty} → ${t.destination} ETA ${t.eta_destination||'?'}`).join('\n')}
+
+PENDING TOs (${pendingTOs.length}):
+${pendingTOs.slice(0,10).map(t=>`${t.to_number||'?'}: ${t.sku} x${t.qty} → ${t.destination}`).join('\n')}
+
+FUNNELS: Pans (TI_PAN_LID, TI_WOK_LID, TI_POT_LID, TI_SAUCE_LID, TI_UT_SPAT, TI_UT_SET), Cutting Boards (TI_BRD_S/M/L, BRD_STND), Jar Vacuum Sealer (MASON_VAC, MASON_LID_REG/WIDE, MASON_FUNNEL, MASON_LABEL), Bag Vacuum Sealer (BAG_VAC etc), Food Warming Mat (FWM_M_GRY/CRM/BLU_US)
+`.trim()
+  }
+
+  async function sendChat() {
+    if(!chatInput.trim()||chatLoading)return
+    const userMsg = {role:'user' as const, content: chatInput.trim()}
+    const newMessages = [...chatMessages, userMsg]
+    setChatMessages(newMessages)
+    setChatInput('')
+    setChatLoading(true)
+    try {
+      const res = await fetch('/api/chat', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({
+          messages: newMessages.map(m=>({role:m.role,content:m.content})),
+          context: buildChatContext()
+        })
+      })
+      const data = await res.json()
+      if(data.reply) setChatMessages(prev=>[...prev,{role:'assistant',content:data.reply}])
+      else setChatMessages(prev=>[...prev,{role:'assistant',content:'Error: '+( data.error||'Unknown error')}])
+    } catch(e:any) {
+      setChatMessages(prev=>[...prev,{role:'assistant',content:'Connection error: '+e.message}])
+    }
+    setChatLoading(false)
   }
 
   async function fetchStockLog() { const{data}=await supabase.from('stock_changelog').select('*').order('changed_at',{ascending:false}).limit(100);if(data)setStockLog(data) }
@@ -279,20 +331,89 @@ export default function Home() {
 
   async function handleCSV(file:File) {
     setImportStatus('Parsing...')
-    const text=await file.text();const lines=text.split('\n').filter(Boolean)
-    const headers=lines[0].split(',').map(h=>h.replace(/"/g,'').trim())
-    const ni=headers.findIndex(h=>h.toLowerCase()==='name'),si=headers.findIndex(h=>h.toLowerCase().includes('lineitem sku'))
-    const qi=headers.findIndex(h=>h.toLowerCase().includes('lineitem quantity')),di=headers.findIndex(h=>h.toLowerCase().includes('created at'))
-    const fi=headers.findIndex(h=>h.toLowerCase().includes('financial status')),shi=headers.findIndex(h=>h.toLowerCase().includes('requires shipping'))
-    let ins=0,sk=0
+    const text=await file.text()
+    const lines=text.split('\n').filter(Boolean)
+    const rawHeaders=lines[0].split(',').map(h=>h.replace(/"/g,'').trim().toLowerCase())
+    const col=(name:string)=>rawHeaders.findIndex(h=>h===name||h.includes(name))
+    const ni=col('name'),si=col('lineitem sku'),qi=col('lineitem quantity')
+    const di=col('created at'),fi=col('financial status'),shi=col('lineitem requires shipping')
+    const pi=col('lineitem price'),tagi=col('tags')
+
+    // Parse all rows, group by order name to inherit financial status
+    const orderStatus: Record<string,string> = {}
+    const orderDate: Record<string,string> = {}
+    const rows: any[] = []
+
     for(let i=1;i<lines.length;i++){
-      const c=lines[i].split(',').map(x=>x.replace(/"/g,'').trim())
-      if(!c[si]||c[fi]?.toLowerCase()!=='paid'||c[shi]?.toLowerCase()==='false'){sk++;continue}
-      const st=skus.find(s=>s.id===c[si])?.status
-      const{error}=await supabase.from('backlog_orders').insert({order_id:c[ni],customer_name:c[ni]||'',sku_id:c[si],qty:parseInt(c[qi])||1,order_date:c[di]||new Date().toISOString(),status:st==='out'||st==='critical'?'on_hold':'active',priority:false})
+      // Handle quoted CSV properly
+      const c: string[] = []
+      let cur='',inQ=false
+      for(const ch of lines[i]){
+        if(ch==='"'){inQ=!inQ}
+        else if(ch===','&&!inQ){c.push(cur.trim());cur=''}
+        else cur+=ch
+      }
+      c.push(cur.trim())
+
+      const orderName=c[ni]?.replace(/"/g,'')
+      if(!orderName)continue
+      const finStatus=c[fi]?.replace(/"/g,'').toLowerCase()
+      if(finStatus==='paid')orderStatus[orderName]='paid'
+      const created=c[di]?.replace(/"/g,'')
+      if(created&&!orderDate[orderName])orderDate[orderName]=created
+      const tags=tagi>=0?c[tagi]?.replace(/"/g,'').toLowerCase():''
+      rows.push({orderName,c,tags})
+    }
+
+    let ins=0,sk=0,aspUpdates: Record<string,{revenue:number,qty:number}>={}
+
+    for(const row of rows){
+      const{orderName,c}=row
+      if(orderStatus[orderName]!=='paid'){sk++;continue}
+      const shopifySku=c[si]?.replace(/"/g,'')
+      const requiresShipping=c[shi]?.replace(/"/g,'').toLowerCase()
+      const price=parseFloat(c[pi]?.replace(/"/g,'')||'0')
+      const qty=parseInt(c[qi]?.replace(/"/g,'')||'1')||1
+
+      // Skip virtual/non-physical SKUs (requires shipping = false means digital/virtual)
+      if(!shopifySku||requiresShipping==='false'){sk++;continue}
+
+      // Map to canonical SKU
+      const mapping=skuMappings.find(m=>m.shopify_sku===shopifySku)
+      const canonicalSku=mapping?mapping.db_sku:shopifySku
+      const actualQty=mapping?qty*mapping.multiplier:qty
+
+      // Check SKU exists in our DB
+      const skuRecord=skus.find(s=>s.id===canonicalSku)
+      if(!skuRecord){sk++;continue}  // Unknown SKU
+
+      // Track for ASP calculation
+      if(!aspUpdates[canonicalSku])aspUpdates[canonicalSku]={revenue:0,qty:0}
+      aspUpdates[canonicalSku].revenue+=price*qty
+      aspUpdates[canonicalSku].qty+=actualQty
+
+      const status=skuRecord.status==='out'||skuRecord.status==='critical'?'on_hold':'active'
+      // Derive funnel from tags (pan, cb, jvs, bvs, fwm)
+      const tagStr=(row.tags||'').toLowerCase()
+      const shopifyFunnel=tagStr.includes('pan')?'Titanium Pan':tagStr.includes(' cb')||tagStr.includes(',cb')||tagStr.startsWith('cb')?'Titanium Cutting Board':tagStr.includes('jvs')?'Jar Vacuum Sealer':tagStr.includes('bvs')?'Bag Vacuum Sealer':tagStr.includes('fwm')?'Food Warming Mat':null
+      const{error}=await supabase.from('backlog_orders').insert({
+        order_id:orderName,customer_name:orderName,sku_id:canonicalSku,
+        qty:actualQty,order_date:orderDate[orderName]||new Date().toISOString(),
+        status,priority:false
+      })
       if(!error)ins++;else sk++
     }
-    setImportStatus(`Done — ${ins} imported, ${sk} skipped`);fetchAll()
+
+    // Update ASP in sku_forecast_config from this batch
+    for(const[sku,{revenue,qty}] of Object.entries(aspUpdates)){
+      if(qty>0){
+        const newAsp=revenue/qty
+        await supabase.from('sku_forecast_config').update({asp_dtc:parseFloat(newAsp.toFixed(2))}).eq('sku',sku)
+      }
+    }
+
+    setImportStatus(`Done — ${ins} imported, ${sk} skipped. ASP updated for ${Object.keys(aspUpdates).length} SKUs.`)
+    fetchAll()
   }
 
   // Derived
@@ -349,10 +470,15 @@ export default function Home() {
           <span style={{fontWeight:700,fontSize:16}}>Plateful</span>
           <span style={{color:'#6b7280',fontSize:14}}>Operations</span>
         </div>
-        <button onClick={fetchAll} style={{background:'none',border:'none',cursor:'pointer',color:'#6b7280',fontSize:13}}>↻ Refresh</button>
+        <div style={{display:'flex',alignItems:'center',gap:12}}>
+          <button onClick={()=>setChatOpen(o=>!o)} style={{display:'flex',alignItems:'center',gap:6,padding:'6px 14px',background:chatOpen?'#111':'#f3f4f6',border:'none',borderRadius:8,cursor:'pointer',color:chatOpen?'#fff':'#374151',fontSize:13,fontWeight:500}}>
+            💬 Ask AI
+          </button>
+          <button onClick={fetchAll} style={{background:'none',border:'none',cursor:'pointer',color:'#6b7280',fontSize:13}}>↻ Refresh</button>
+        </div>
       </div>
       <div style={{...sticky,top:48,background:'#fff',borderBottom:'1px solid #e5e7eb',padding:'0 24px',display:'flex',gap:16}}>
-        {(['dashboard','forecast','units','transfers','ue','vendors','backlog','import'] as Tab[]).map(t=>(
+        {(['dashboard','forecast','units','transfers','ue','vendors'] as Tab[]).map(t=>(
           <button key={t} onClick={()=>switchTab(t)} style={{padding:'11px 0',background:'none',border:'none',cursor:'pointer',borderBottom:tab===t?'2px solid #111':'2px solid transparent',fontWeight:tab===t?600:400,fontSize:13,color:tab===t?'#111':'#6b7280',whiteSpace:'nowrap',textTransform:'capitalize'}}>
             {t==='ue'?'Unit Economics':t==='transfers'?'Transfer Orders':t.charAt(0).toUpperCase()+t.slice(1)}
           </button>
@@ -590,7 +716,16 @@ export default function Home() {
               const weeks=[...new Set(fwData.map(r=>r.week_start))].filter(w=>w>=TODAY_STR).sort().slice(0,36)
               return(
                 <div key={funnel} style={{marginBottom:16}}>
-                  {fBar(c,()=>togUnits(funnel),funnel,fConfigs.length)}
+                  {fBar(c,()=>togUnits(funnel),funnel,fConfigs.length,
+                    (() => {
+                      const total=fConfigs.reduce((s,c)=>s+(c.dtc_mix_pct||0),0)
+                      const pct=(total*100).toFixed(0)
+                      const ok=Math.abs(total-1)<0.02
+                      return <span style={{fontSize:11,color:ok?'#6b7280':'#dc2626',marginLeft:4}}>
+                        Split total: {pct}%{!ok&&' ⚠ should be 100%'}
+                      </span>
+                    })()
+                  )}
                   {!c&&(
                     <div style={{border:'1px solid #e5e7eb',borderTop:'none',borderRadius:'0 0 8px 8px',background:'#fff',overflowX:'auto'}}>
                       <table style={{borderCollapse:'collapse',fontSize:12,minWidth:600}}>
@@ -1129,6 +1264,59 @@ export default function Home() {
           </div>
         </div>
       )}
+      {/* ── Chat Panel ── */}
+      {chatOpen&&(
+        <div style={{position:'fixed',bottom:24,right:24,width:420,height:560,background:'#fff',borderRadius:16,boxShadow:'0 8px 40px rgba(0,0,0,0.18)',display:'flex',flexDirection:'column',zIndex:200,border:'1px solid #e5e7eb'}}>
+          <div style={{padding:'14px 16px',borderBottom:'1px solid #f3f4f6',display:'flex',alignItems:'center',justifyContent:'space-between',background:'#111',borderRadius:'16px 16px 0 0'}}>
+            <div style={{display:'flex',alignItems:'center',gap:8}}>
+              <span style={{fontSize:16}}>💬</span>
+              <span style={{fontWeight:700,fontSize:14,color:'#fff'}}>Plateful AI</span>
+              <span style={{fontSize:11,color:'#9ca3af',background:'rgba(255,255,255,0.1)',padding:'2px 6px',borderRadius:4}}>Powered by Claude</span>
+            </div>
+            <div style={{display:'flex',gap:8}}>
+              <button onClick={()=>setChatMessages([])} style={{background:'none',border:'none',cursor:'pointer',color:'#9ca3af',fontSize:11}}>Clear</button>
+              <button onClick={()=>setChatOpen(false)} style={{background:'none',border:'none',cursor:'pointer',color:'#9ca3af',fontSize:18,lineHeight:1}}>×</button>
+            </div>
+          </div>
+          <div style={{flex:1,overflowY:'auto',padding:'16px',display:'flex',flexDirection:'column',gap:10}}>
+            {chatMessages.length===0&&(
+              <div style={{color:'#9ca3af',fontSize:13,textAlign:'center',marginTop:40}}>
+                <div style={{fontSize:24,marginBottom:12}}>💬</div>
+                <div style={{fontWeight:500,marginBottom:6}}>Ask me anything about your inventory</div>
+                <div style={{fontSize:12}}>Try: "What's at risk of stocking out?" or "When does TI_PAN_LID run out?"</div>
+                <div style={{display:'flex',flexDirection:'column',gap:6,marginTop:16}}>
+                  {["What SKUs are at stockout risk?","Which TOs are arriving this week?","How many days of TI_BRD_S do we have left?"].map(q=>(
+                    <button key={q} onClick={()=>{setChatInput(q)}} style={{padding:'8px 12px',background:'#f3f4f6',border:'1px solid #e5e7eb',borderRadius:8,cursor:'pointer',fontSize:12,color:'#374151',textAlign:'left'}}>{q}</button>
+                  ))}
+                </div>
+              </div>
+            )}
+            {chatMessages.map((m,i)=>(
+              <div key={i} style={{display:'flex',justifyContent:m.role==='user'?'flex-end':'flex-start'}}>
+                <div style={{maxWidth:'80%',padding:'10px 14px',borderRadius:m.role==='user'?'16px 16px 4px 16px':'16px 16px 16px 4px',background:m.role==='user'?'#111':'#f3f4f6',color:m.role==='user'?'#fff':'#111',fontSize:13,lineHeight:1.5,whiteSpace:'pre-wrap'}}>
+                  {m.content}
+                </div>
+              </div>
+            ))}
+            {chatLoading&&(
+              <div style={{display:'flex',justifyContent:'flex-start'}}>
+                <div style={{padding:'10px 14px',background:'#f3f4f6',borderRadius:'16px 16px 16px 4px',fontSize:13,color:'#9ca3af'}}>Thinking...</div>
+              </div>
+            )}
+          </div>
+          <div style={{padding:'12px',borderTop:'1px solid #f3f4f6',display:'flex',gap:8}}>
+            <input
+              value={chatInput}
+              onChange={e=>setChatInput(e.target.value)}
+              onKeyDown={e=>e.key==='Enter'&&!e.shiftKey&&(e.preventDefault(),sendChat())}
+              placeholder="Ask about inventory, stockouts, TOs..."
+              style={{flex:1,padding:'9px 12px',border:'1px solid #e5e7eb',borderRadius:10,fontSize:13,outline:'none'}}
+            />
+            <button onClick={sendChat} disabled={!chatInput.trim()||chatLoading} style={{padding:'9px 16px',background:chatInput.trim()&&!chatLoading?'#111':'#d1d5db',border:'none',borderRadius:10,cursor:chatInput.trim()&&!chatLoading?'pointer':'default',color:'#fff',fontSize:13,fontWeight:600}}>Send</button>
+          </div>
+        </div>
+      )}
+
     </div>
   )
 }
