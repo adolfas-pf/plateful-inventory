@@ -10,7 +10,7 @@ type SKU = { id: string; name: string; current_stock: number; safety_reserve: nu
 type TransferOrder = { id: string; to_number: string; destination: string; sku: string; qty: number; pick_up_date: string; eta_destination: string; shipping_method: string; status: string }
 type BacklogOrder = { id: string; order_id: string; customer_name: string; sku_id: string; qty: number; order_date: string; status: string; priority: boolean }
 type UERow = { sku: string; product_name: string; hts_code: string; manufacturer: string; manufacturer_country: string; production_lead_time_days: number; cbm: number; pkg_length_cm: number; pkg_width_cm: number; pkg_height_cm: number; cogs: number; inspection: number; commission: number; tariff_pct: number; tariff_cost: number; placement_fees: number; shipping_to_us: number; inbound_3pl: number; storage_3pl: number; us_landed_cost: number; amazon_landed_cogs: number; referral_fees: number; pick_pack_amazon: number; selling_price_amazon: number; profit_amazon: number; margin_amazon: number; selling_price_dtc: number; transaction_fees_dtc: number; pick_pack_dtc: number; shipping_dtc: number; profit_dtc: number; margin_dtc: number; upc: string; asin: string; current_unit_cost: number; current_shipping_cost: number }
-type ForecastWeekly = { id: string; week_start: string; channel: string; funnel: string; sales_forecast: number | null; sales_actual: number | null; ad_spend_forecast: number | null; ad_spend_actual: number | null; mer_forecast: number | null; mer_actual: number | null }
+type ForecastWeekly = { id: string; week_start: string; channel: string; funnel: string; scenario: string | null; sales_forecast: number | null; sales_actual: number | null; ad_spend_forecast: number | null; ad_spend_actual: number | null; mer_forecast: number | null; mer_actual: number | null }
 type ForecastDaily = { id: string; date: string; channel: string; funnel: string; sales_actual: number | null; ad_spend_actual: number | null }
 type SkuConfig = { sku: string; asp_dtc: number; dtc_mix_pct: number; funnel: string }
 type UnitsWeekly = { id: string; sku: string; channel: string; week_start: string; units_actual: number | null; units_forecast: number | null }
@@ -179,7 +179,6 @@ export default function Home() {
     if(typeof window==='undefined')return'realistic'
     try{return(sessionStorage.getItem('scenario') as any)||'realistic'}catch{return'realistic'}
   })
-  const scenarioMultiplier = scenario==='best'?1.2:scenario==='worst'?0.8:1.0
   const [unitsWarehouse, setUnitsWarehouse] = useState<string>('All')
   const [filterSku, setFilterSku] = useState('all')
   const [filterStatus, setFilterStatus] = useState('active')
@@ -259,8 +258,11 @@ export default function Home() {
     const ex=fwData.find(r=>r.week_start===week&&r.channel===channel&&r.funnel===funnel)
     const oldVal=ex?(ex as any)[field]:null;const newVal=parseFloat(fcastNewVal)
     await supabase.from('forecast_changelog').insert({week_start:week,channel,funnel,field_changed:field,previous_value:oldVal,new_value:newVal,reason:fcastReason})
-    if(ex)await supabase.from('forecast_weekly').update({[field]:newVal}).eq('id',ex.id)
-    else await supabase.from('forecast_weekly').insert({week_start:week,channel,funnel,[field]:newVal})
+    if(ex){
+      await supabase.from('forecast_weekly').update({[field]:newVal}).eq('id',ex.id)
+    } else {
+      await supabase.from('forecast_weekly').insert({week_start:week,channel,funnel,scenario:isFuture(week)?scenario:'realistic',[field]:newVal})
+    }
     setEditFcast(null);setFcastNewVal('');setFcastReason('');setFcastSaving(false);fetchAll()
   }
 
@@ -309,13 +311,11 @@ export default function Home() {
   const fcastWeeks = [...new Set(fwData.map(r=>r.week_start))].sort()
   const visibleFcastWeeks = hidePastWeeks ? fcastWeeks.filter(w=>!isFuture(w)?fcastWeeks.indexOf(w)>=fcastWeeks.filter(x=>!isFuture(x)).length-2:true) : fcastWeeks
   const getFW = (w:string,ch:string,fn:string)=>{
-    const row=fwData.find(r=>r.week_start===w&&r.channel===ch&&r.funnel===fn)
-    if(!row||!isFuture(w))return row
-    // Apply scenario multiplier to future forecast values only
-    return {...row,
-      sales_forecast: row.sales_forecast!=null?row.sales_forecast*scenarioMultiplier:null,
-      ad_spend_forecast: row.ad_spend_forecast!=null?row.ad_spend_forecast*scenarioMultiplier:null,
-    }
+    // For future weeks, filter by current scenario
+    // For past weeks (actuals), always use realistic
+    const sc = isFuture(w) ? scenario : 'realistic'
+    return fwData.find(r=>r.week_start===w&&r.channel===ch&&r.funnel===fn&&(r.scenario===sc||(r.scenario==null&&sc==='realistic')))
+      ?? fwData.find(r=>r.week_start===w&&r.channel===ch&&r.funnel===fn)
   }
   const getDailies = (w:string,ch:string,fn:string)=>{const d0=new Date(w);const d1=new Date(d0);d1.setDate(d0.getDate()+6);return fdData.filter(d=>{const dt=new Date(d.date);return d.channel===ch&&d.funnel===fn&&dt>=d0&&dt<=d1}).sort((a,b)=>a.date.localeCompare(b.date))}
   const ueByFunnel = FUNNEL_ORDER.reduce((a,f)=>{a[f]=ueData.filter(r=>FUNNEL_MAP[f]?.includes(r.sku));return a},{} as Record<string,UERow[]>)
@@ -368,10 +368,13 @@ export default function Home() {
             {/* ── Stockout Alert Panel ── */}
             {(() => {
               const alerts = skus.filter(s=>!s.hidden).flatMap(s=>{
-                const firstStockout=bowWeeks.find(w=>{const v=getBOW(s.id,w,'All');return v!=null&&v<0})
+                const firstStockout=bowWeeks.find(w=>{const v=getBOW(s.id,w,dashWarehouse);return v!=null&&v<0})
                 if(!firstStockout)return[]
-                const bow=getBOW(s.id,firstStockout,'All')
-                return [{sku:s.id,name:s.name,date:firstStockout,bow:bow??0,curStock:s.current_stock}]
+                const bowAtStockout=getBOW(s.id,firstStockout,dashWarehouse)??0
+                const weeksUntil=Math.max(0,Math.round((new Date(firstStockout).getTime()-new Date(TODAY_STR).getTime())/604800000))
+                // Check if an inbound TO covers it
+                const inboundTO=transfers.find(t=>t.sku===s.id&&t.eta_destination&&t.eta_destination>=firstStockout&&t.status!=='Cancelled')
+                return [{sku:s.id,name:s.name,date:firstStockout,bowAtStockout,weeksUntil,inboundTO,curStock:s.current_stock,avgWeekly:s.avg_weekly_sales}]
               }).sort((a,b)=>a.date.localeCompare(b.date))
               if(alerts.length===0)return null
               return(
@@ -382,10 +385,15 @@ export default function Home() {
                   </div>
                   <div style={{display:'flex',flexWrap:'wrap',gap:8}}>
                     {alerts.map(a=>(
-                      <div key={a.sku} style={{background:'#fff',border:'1px solid #fecaca',borderRadius:8,padding:'8px 12px',fontSize:12}}>
-                        <div style={{fontFamily:'monospace',fontWeight:700,color:'#dc2626',marginBottom:2}}>{a.sku}</div>
-                        <div style={{color:'#374151'}}>Stockout <strong>{fmtDate(a.date)}</strong></div>
-                        <div style={{color:'#9ca3af',fontSize:11,marginTop:1}}>Now: {a.curStock.toLocaleString()}</div>
+                      <div key={a.sku} style={{background:'#fff',border:'1px solid #fecaca',borderRadius:8,padding:'10px 14px',fontSize:12,minWidth:180}}>
+                        <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:4}}>
+                          <span style={{fontFamily:'monospace',fontWeight:700,color:'#dc2626'}}>{a.sku}</span>
+                          {a.inboundTO&&<span style={{fontSize:10,background:'#dcfce7',color:'#15803d',padding:'1px 5px',borderRadius:4,fontWeight:500}}>TO inbound</span>}
+                        </div>
+                        <div style={{color:'#374151',marginBottom:2}}>Stocks out <strong>{fmtDate(a.date)}</strong></div>
+                        <div style={{color:'#6b7280',fontSize:11,marginBottom:2}}>{a.weeksUntil===0?'This week':`${a.weeksUntil} week${a.weeksUntil!==1?'s':''} away`} · {a.bowAtStockout.toLocaleString()} shortfall</div>
+                        <div style={{color:'#9ca3af',fontSize:11}}>{a.avgWeekly>0?`Selling ~${a.avgWeekly.toLocaleString()}/wk`:''}</div>
+                        {a.inboundTO&&<div style={{fontSize:10,color:'#15803d',marginTop:4}}>TO {a.inboundTO.to_number}: +{a.inboundTO.qty?.toLocaleString()} due {fmtDate(a.inboundTO.eta_destination)}</div>}
                       </div>
                     ))}
                   </div>
@@ -481,7 +489,7 @@ export default function Home() {
                 </label>
                 <div style={{display:'flex',alignItems:'center',gap:12}}>
                 <div style={{display:'flex',gap:2,background:'#f3f4f6',borderRadius:8,padding:3}}>
-                  {([['realistic','Realistic'],['best','Best +20%'],['worst','Worst -20%']] as const).map(([s,label])=>(
+                  {([['realistic','Realistic'],['best','Best Case'],['worst','Worst Case']] as const).map(([s,label])=>(
                     <button key={s} onClick={()=>switchScenario(s)} style={{padding:'5px 14px',borderRadius:6,border:'none',cursor:'pointer',background:scenario===s?s==='best'?'#dcfce7':s==='worst'?'#fee2e2':'#fff':'transparent',fontWeight:scenario===s?600:400,fontSize:12,color:scenario===s?s==='best'?'#15803d':s==='worst'?'#dc2626':'#111':'#6b7280',boxShadow:scenario===s?'0 1px 3px rgba(0,0,0,0.1)':'none'}}>{label}</button>
                   ))}
                 </div>
@@ -590,6 +598,8 @@ export default function Home() {
                           <th style={{...th,width:140,position:'sticky',left:0,background:'#f9fafb',zIndex:10}}>SKU</th>
                           <th style={{...th,width:65}}>Now</th>
                           <th style={{...th,width:65}}>Avg/Wk</th>
+                          <th style={{...th,width:65,color:'#2563eb'}}>ASP ✎</th>
+                          <th style={{...th,width:65,color:'#2563eb'}}>Split% ✎</th>
                           {weeks.map(w=>{
                             const fut=isFuture(w)
                             // Check if any TO arrives this week for this funnel
@@ -641,6 +651,8 @@ export default function Home() {
                                 </td>
                                 <td style={{...td,fontWeight:600}}>{(getBOW(cfg.sku,'2026-03-23',unitsWarehouse)??curStock).toLocaleString()}</td>
                                 <td style={{...td,color:'#6b7280'}}>{avgWeekly?avgWeekly.toLocaleString():'—'}</td>
+                              <td onClick={()=>{setEditingASP({sku:cfg.sku,field:'asp_dtc',label:'ASP (DTC)'});setAspNewVal(cfg.asp_dtc?.toString()||'')}} style={{...td,color:'#2563eb',cursor:'pointer'}}><span style={{borderBottom:'1px dashed #93c5fd',paddingBottom:1}}>${cfg.asp_dtc?.toFixed(0)??'—'}</span></td>
+                              <td onClick={()=>{setEditingASP({sku:cfg.sku,field:'dtc_mix_pct',label:'Revenue Split %'});setAspNewVal(cfg.dtc_mix_pct?.toString()||'')}} style={{...td,color:'#2563eb',cursor:'pointer'}}><span style={{borderBottom:'1px dashed #93c5fd',paddingBottom:1}}>{cfg.dtc_mix_pct!=null?(cfg.dtc_mix_pct*100).toFixed(1)+'%':'—'}</span></td>
                                 {weeklyProjections.map(({week,stock,demand,toArrival,fromBOW})=>{
                                   const isStockout=stock<=0
                                   const isLow=stock>0&&avgWeekly>0&&stock<avgWeekly*2
