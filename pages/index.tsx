@@ -18,7 +18,7 @@ type Vendor = { id: string; vendor_name: string; full_name: string; type: string
 type PaymentTerms = { id: string; sku: string; factory: string; terms_description: string; deposit_pct: number; at_pickup_pct: number; balance_pct: number; balance_days: number }
 type TOComment = { id: string; to_number: string; comment: string; created_at: string }
 type SKUComment = { id: string; sku: string; comment: string; created_at: string }
-type BOW = { id: string; sku: string; week_start: string; bow_qty: number }
+type BOW = { id: string; warehouse: string; sku: string; week_start: string; bow_qty: number }
 type Tab = 'dashboard' | 'forecast' | 'units' | 'transfers' | 'ue' | 'vendors' | 'backlog' | 'import'
 
 const FUNNEL_MAP: Record<string, string[]> = {
@@ -170,6 +170,7 @@ export default function Home() {
   const [fcastNewVal, setFcastNewVal] = useState('')
   const [fcastReason, setFcastReason] = useState('')
   const [fcastSaving, setFcastSaving] = useState(false)
+  const [dashWarehouse, setDashWarehouse] = useState<string>('All')
   const [filterSku, setFilterSku] = useState('all')
   const [filterStatus, setFilterStatus] = useState('active')
   const [searchOrder, setSearchOrder] = useState('')
@@ -295,7 +296,7 @@ export default function Home() {
   const ueByFunnel = FUNNEL_ORDER.reduce((a,f)=>{a[f]=ueData.filter(r=>FUNNEL_MAP[f]?.includes(r.sku));return a},{} as Record<string,UERow[]>)
   const manufacturers = vendors.filter(v=>v.type==='Manufacturer')
   const toNumbers = [...new Set(transfers.map(t=>t.to_number).filter(Boolean))]
-  const getBOW = (sku:string,week:string)=>bowData.find(b=>b.sku===sku&&b.week_start===week)?.bow_qty??null
+  const getBOW = (sku:string,week:string,warehouse:string='All')=>bowData.find(b=>b.warehouse===warehouse&&b.sku===sku&&b.week_start===week)?.bow_qty??null
   const bowWeeks = [...new Set(bowData.map(b=>b.week_start))].filter(w=>w>=TODAY_STR).sort().slice(0,16)
 
   // Styles
@@ -339,12 +340,15 @@ export default function Home() {
         {/* ══ DASHBOARD ══ */}
         {!loading&&tab==='dashboard'&&(
           <div>
-            <div style={{display:'flex',justifyContent:'space-between',marginBottom:16}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
               <h2 style={{fontSize:15,fontWeight:600,margin:0}}>Stock Levels</h2>
               <div style={{display:'flex',gap:10}}>
                 <button onClick={()=>setShowHidden(h=>!h)} style={{fontSize:12,color:'#6b7280',background:'none',border:'1px solid #e5e7eb',borderRadius:6,padding:'4px 10px',cursor:'pointer'}}>{showHidden?'Hide deprecated':'Show deprecated'}</button>
                 <button onClick={()=>{setShowStockLog(true);fetchStockLog()}} style={{fontSize:12,color:'#6b7280',background:'none',border:'1px solid #e5e7eb',borderRadius:6,padding:'4px 10px',cursor:'pointer'}}>Change Log</button>
               </div>
+            </div>
+            <div style={{display:'flex',gap:2,background:'#f3f4f6',borderRadius:8,padding:3,marginBottom:16,width:'fit-content'}}>
+              {['All','KSNJ','KSCA','Amazon'].map(wh=><button key={wh} onClick={()=>setDashWarehouse(wh)} style={{padding:'5px 16px',borderRadius:6,border:'none',cursor:'pointer',background:dashWarehouse===wh?'#fff':'transparent',fontWeight:dashWarehouse===wh?600:400,fontSize:12,color:dashWarehouse===wh?'#111':'#6b7280',boxShadow:dashWarehouse===wh?'0 1px 3px rgba(0,0,0,0.1)':'none'}}>{wh}</button>)}
             </div>
             {FUNNEL_ORDER.map(funnel=>{
               const fskus=skusByFunnel[funnel]||[];if(!fskus.length)return null
@@ -380,7 +384,7 @@ export default function Home() {
                                 <td style={td}><span style={{fontWeight:600,color:daysColor(days)}}>{days==null?'—':days<=0?'Stockout':days+'d'}</span></td>
                                 <td style={td}>{chip(isOut?'Out':isCrit?'Critical':'OK',isOut?'#dc2626':isCrit?'#d97706':'#16a34a',isOut?'#fee2e2':isCrit?'#fef3c7':'#dcfce7')}</td>
                                 {bowWeeks.slice(0,8).map(w=>{
-                                  const bow=getBOW(s.id,w)
+                                  const bow=getBOW(s.id,w,dashWarehouse)
                                   const isNeg=bow!=null&&bow<0
                                   const isLow=bow!=null&&bow>=0&&bow<(s.avg_weekly_sales*2)
                                   return<td key={w} style={{...td,textAlign:'center',borderLeft:'1px solid #f3f4f6',background:isNeg?'#fee2e2':isLow?'#fef3c7':'transparent',color:isNeg?'#dc2626':isLow?'#d97706':'#374151',fontWeight:isNeg?600:400}}>
