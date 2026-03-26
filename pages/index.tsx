@@ -109,6 +109,7 @@ function useSet(ssKey: string): [Set<string>, (k:string)=>void, (v:boolean, k:st
 export default function Home() {
   const [tab, setTab] = useState<Tab>(() => { if(typeof window==='undefined')return'forecast';try{return(sessionStorage.getItem('tab') as Tab)||'forecast'}catch{return'forecast'} })
   const switchTab = (t:Tab) => { try{if(typeof window!=='undefined')sessionStorage.setItem('tab',t)}catch{};setTab(t) }
+  const switchScenario = (s:'realistic'|'best'|'worst') => { try{if(typeof window!=='undefined')sessionStorage.setItem('scenario',s)}catch{};setScenario(s) }
 
   const [skus, setSkus] = useState<SKU[]>([])
   const [orders, setOrders] = useState<BacklogOrder[]>([])
@@ -174,6 +175,11 @@ export default function Home() {
   const [aspNewVal, setAspNewVal] = useState('')
   const [aspSaving, setAspSaving] = useState(false)
   const [dashWarehouse, setDashWarehouse] = useState<string>('All')
+  const [scenario, setScenario] = useState<'realistic'|'best'|'worst'>(() => {
+    if(typeof window==='undefined')return'realistic'
+    try{return(sessionStorage.getItem('scenario') as any)||'realistic'}catch{return'realistic'}
+  })
+  const scenarioMultiplier = scenario==='best'?1.2:scenario==='worst'?0.8:1.0
   const [unitsWarehouse, setUnitsWarehouse] = useState<string>('All')
   const [filterSku, setFilterSku] = useState('all')
   const [filterStatus, setFilterStatus] = useState('active')
@@ -302,7 +308,15 @@ export default function Home() {
   })
   const fcastWeeks = [...new Set(fwData.map(r=>r.week_start))].sort()
   const visibleFcastWeeks = hidePastWeeks ? fcastWeeks.filter(w=>!isFuture(w)?fcastWeeks.indexOf(w)>=fcastWeeks.filter(x=>!isFuture(x)).length-2:true) : fcastWeeks
-  const getFW = (w:string,ch:string,fn:string)=>fwData.find(r=>r.week_start===w&&r.channel===ch&&r.funnel===fn)
+  const getFW = (w:string,ch:string,fn:string)=>{
+    const row=fwData.find(r=>r.week_start===w&&r.channel===ch&&r.funnel===fn)
+    if(!row||!isFuture(w))return row
+    // Apply scenario multiplier to future forecast values only
+    return {...row,
+      sales_forecast: row.sales_forecast!=null?row.sales_forecast*scenarioMultiplier:null,
+      ad_spend_forecast: row.ad_spend_forecast!=null?row.ad_spend_forecast*scenarioMultiplier:null,
+    }
+  }
   const getDailies = (w:string,ch:string,fn:string)=>{const d0=new Date(w);const d1=new Date(d0);d1.setDate(d0.getDate()+6);return fdData.filter(d=>{const dt=new Date(d.date);return d.channel===ch&&d.funnel===fn&&dt>=d0&&dt<=d1}).sort((a,b)=>a.date.localeCompare(b.date))}
   const ueByFunnel = FUNNEL_ORDER.reduce((a,f)=>{a[f]=ueData.filter(r=>FUNNEL_MAP[f]?.includes(r.sku));return a},{} as Record<string,UERow[]>)
   const manufacturers = vendors.filter(v=>v.type==='Manufacturer')
@@ -351,6 +365,33 @@ export default function Home() {
         {/* ══ DASHBOARD ══ */}
         {!loading&&tab==='dashboard'&&(
           <div>
+            {/* ── Stockout Alert Panel ── */}
+            {(() => {
+              const alerts = skus.filter(s=>!s.hidden).flatMap(s=>{
+                const firstStockout=bowWeeks.find(w=>{const v=getBOW(s.id,w,'All');return v!=null&&v<0})
+                if(!firstStockout)return[]
+                const bow=getBOW(s.id,firstStockout,'All')
+                return [{sku:s.id,name:s.name,date:firstStockout,bow:bow??0,curStock:s.current_stock}]
+              }).sort((a,b)=>a.date.localeCompare(b.date))
+              if(alerts.length===0)return null
+              return(
+                <div style={{background:'#fef2f2',border:'1px solid #fecaca',borderRadius:10,padding:'14px 18px',marginBottom:20}}>
+                  <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:12}}>
+                    <span style={{fontSize:14,fontWeight:700,color:'#dc2626'}}>⚠ Stockout Alerts</span>
+                    <span style={{fontSize:12,color:'#ef4444'}}>{alerts.length} SKU{alerts.length!==1?'s':''} at risk</span>
+                  </div>
+                  <div style={{display:'flex',flexWrap:'wrap',gap:8}}>
+                    {alerts.map(a=>(
+                      <div key={a.sku} style={{background:'#fff',border:'1px solid #fecaca',borderRadius:8,padding:'8px 12px',fontSize:12}}>
+                        <div style={{fontFamily:'monospace',fontWeight:700,color:'#dc2626',marginBottom:2}}>{a.sku}</div>
+                        <div style={{color:'#374151'}}>Stockout <strong>{fmtDate(a.date)}</strong></div>
+                        <div style={{color:'#9ca3af',fontSize:11,marginTop:1}}>Now: {a.curStock.toLocaleString()}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )
+            })()}
             <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
               <h2 style={{fontSize:15,fontWeight:600,margin:0}}>Stock Levels</h2>
               <div style={{display:'flex',gap:10}}>
@@ -438,7 +479,14 @@ export default function Home() {
                   <input type="checkbox" checked={hidePastWeeks} onChange={e=>{setHidePastWeeks(e.target.checked);try{if(typeof window!=='undefined')sessionStorage.setItem('hidePast',String(e.target.checked))}catch{}}} />
                   Hide past weeks
                 </label>
+                <div style={{display:'flex',alignItems:'center',gap:12}}>
+                <div style={{display:'flex',gap:2,background:'#f3f4f6',borderRadius:8,padding:3}}>
+                  {([['realistic','Realistic'],['best','Best +20%'],['worst','Worst -20%']] as const).map(([s,label])=>(
+                    <button key={s} onClick={()=>switchScenario(s)} style={{padding:'5px 14px',borderRadius:6,border:'none',cursor:'pointer',background:scenario===s?s==='best'?'#dcfce7':s==='worst'?'#fee2e2':'#fff':'transparent',fontWeight:scenario===s?600:400,fontSize:12,color:scenario===s?s==='best'?'#15803d':s==='worst'?'#dc2626':'#111':'#6b7280',boxShadow:scenario===s?'0 1px 3px rgba(0,0,0,0.1)':'none'}}>{label}</button>
+                  ))}
+                </div>
                 <span style={{fontSize:12,color:'#9ca3af'}}>Blue = editable forecast</span>
+              </div>
               </div>
             </div>
             {FUNNELS_FORECAST.map(funnel=>{
@@ -514,7 +562,14 @@ export default function Home() {
           <div>
             <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
               <h2 style={{fontSize:15,fontWeight:600,margin:0}}>Inventory Projection</h2>
-              <span style={{fontSize:12,color:'#9ca3af'}}>Stock depleted by weekly demand · Green = TO arrival · Red = stockout</span>
+              <div style={{display:'flex',alignItems:'center',gap:12}}>
+                <div style={{display:'flex',gap:2,background:'#f3f4f6',borderRadius:8,padding:3}}>
+                  {([['realistic','Realistic'],['best','Best'],['worst','Worst']] as const).map(([s,label])=>(
+                    <button key={s} onClick={()=>switchScenario(s)} style={{padding:'5px 12px',borderRadius:6,border:'none',cursor:'pointer',background:scenario===s?s==='best'?'#dcfce7':s==='worst'?'#fee2e2':'#fff':'transparent',fontWeight:scenario===s?600:400,fontSize:12,color:scenario===s?s==='best'?'#15803d':s==='worst'?'#dc2626':'#111':'#6b7280',boxShadow:scenario===s?'0 1px 3px rgba(0,0,0,0.1)':'none'}}>{label}</button>
+                  ))}
+                </div>
+                <span style={{fontSize:12,color:'#9ca3af'}}>Demand depleted weekly · Green = TO arrival · Red = stockout</span>
+              </div>
             </div>
             <div style={{position:'sticky',top:96,zIndex:40,background:'#f9fafb',paddingTop:4,paddingBottom:8}}>
               <div style={{display:'flex',gap:2,background:'#f3f4f6',borderRadius:8,padding:3,width:'fit-content'}}>
