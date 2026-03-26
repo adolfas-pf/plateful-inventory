@@ -207,6 +207,7 @@ export default function Home() {
       supabase.from('to_comments').select('*').order('created_at'),
       supabase.from('sku_comments').select('*').order('created_at'),
       supabase.from('inventory_bow').select('*').order('week_start'),
+      supabase.from('sku_mapping').select('shopify_sku,db_sku,multiplier'),
     ])
     if(a.data)setSkus(a.data); if(b.data)setOrders(b.data); if(c.data)setTransfers(c.data)
     if(d.data)setUeData(d.data); if(e.data)setFwData(e.data); if(f.data)setFdData(f.data)
