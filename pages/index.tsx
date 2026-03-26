@@ -170,6 +170,9 @@ export default function Home() {
   const [fcastNewVal, setFcastNewVal] = useState('')
   const [fcastReason, setFcastReason] = useState('')
   const [fcastSaving, setFcastSaving] = useState(false)
+  const [editingASP, setEditingASP] = useState<{sku:string,field:'asp_dtc'|'dtc_mix_pct',label:string}|null>(null)
+  const [aspNewVal, setAspNewVal] = useState('')
+  const [aspSaving, setAspSaving] = useState(false)
   const [dashWarehouse, setDashWarehouse] = useState<string>('All')
   const [unitsWarehouse, setUnitsWarehouse] = useState<string>('All')
   const [filterSku, setFilterSku] = useState('all')
@@ -253,6 +256,13 @@ export default function Home() {
     if(ex)await supabase.from('forecast_weekly').update({[field]:newVal}).eq('id',ex.id)
     else await supabase.from('forecast_weekly').insert({week_start:week,channel,funnel,[field]:newVal})
     setEditFcast(null);setFcastNewVal('');setFcastReason('');setFcastSaving(false);fetchAll()
+  }
+
+  async function saveASPEdit() {
+    if(!editingASP||!aspNewVal.trim())return;setAspSaving(true)
+    const newVal=parseFloat(aspNewVal)
+    await supabase.from('sku_forecast_config').update({[editingASP.field]:newVal}).eq('sku',editingASP.sku)
+    setEditingASP(null);setAspNewVal('');setAspSaving(false);fetchAll()
   }
 
   async function toggleHideVendor(v:Vendor) {
@@ -385,7 +395,15 @@ export default function Home() {
                                 <td style={{...td,fontWeight:600}}>{s.current_stock.toLocaleString()}</td>
                                 <td style={{...td,color:'#6b7280'}}>{s.avg_weekly_sales?s.avg_weekly_sales.toLocaleString():'—'}</td>
                                 <td style={td}><span style={{fontWeight:600,color:daysColor(days)}}>{days==null?'—':days<=0?'Stockout':days+'d'}</span></td>
-                                <td style={td}>{chip(isOut?'Out':isCrit?'Critical':'OK',isOut?'#dc2626':isCrit?'#d97706':'#16a34a',isOut?'#fee2e2':isCrit?'#fef3c7':'#dcfce7')}</td>
+                                <td style={td}>{(() => {
+                                  if(s.current_stock===0)return chip('Stockout','#dc2626','#fee2e2')
+                                  const futureBOW=bowWeeks.map(w=>getBOW(s.id,w,dashWarehouse)).filter(v=>v!=null)
+                                  const goesNegative=futureBOW.some(v=>v!=null&&v<0)
+                                  const firstStockout=bowWeeks.find(w=>{const v=getBOW(s.id,w,dashWarehouse);return v!=null&&v<0})
+                                  if(goesNegative)return chip('Stockout '+fmtDate(firstStockout||''),'#dc2626','#fee2e2')
+                                  if(days!=null&&days<60)return chip(days+'d — reorder','#d97706','#fef3c7')
+                                  return chip('OK','#16a34a','#dcfce7')
+                                })()}</td>
                                 {bowWeeks.slice(0,8).map(w=>{
                                   const bow=getBOW(s.id,w,dashWarehouse)
                                   const isNeg=bow!=null&&bow<0
@@ -539,8 +557,6 @@ export default function Home() {
                             
                             for(const week of weeks){
                               // First check if we have BOW data for this week
-                              const bowVal=getBOW(cfg.sku,week,unitsWarehouse)
-                              
                               // Demand this week: from units_forecast if available, else calc from revenue
                               const unitFcst=unitsData.find(u=>u.sku===cfg.sku&&u.week_start===week)
                               const fw=fwData.find(r=>r.week_start===week&&r.channel==='DTC'&&r.funnel===funnel)
@@ -558,13 +574,9 @@ export default function Home() {
                                 t.status!=='Cancelled'
                               ).reduce((s,t)=>s+(t.qty||0),0)
                               
-                              // Use BOW from spreadsheet if available, otherwise calculate
-                              if(bowVal!=null){
-                                runningStock=bowVal
-                              } else {
-                                runningStock=runningStock-demand+toArrival
-                              }
-                              weeklyProjections.push({week,stock:runningStock,demand,toArrival,fromBOW:bowVal!=null})
+                              // Always calculate forward - BOW data only used as starting point
+                              runningStock=runningStock-demand+toArrival
+                              weeklyProjections.push({week,stock:runningStock,demand,toArrival,fromBOW:false})
                             }
                             
                             return(
@@ -817,25 +829,33 @@ export default function Home() {
                   </div>
                   {!vc&&(
                     <div style={{padding:'12px 16px'}}>
-                      <div style={{display:'flex',gap:24,fontSize:13,marginBottom:12,paddingBottom:12,borderBottom:'1px solid #f3f4f6'}}>
+                      <div style={{display:'flex',gap:24,fontSize:13,marginBottom:12,paddingBottom:12,borderBottom:'1px solid #f3f4f6',flexWrap:'wrap'}}>
                         {v.address&&<div><div style={{fontSize:11,color:'#9ca3af',marginBottom:2}}>Address</div><div>{v.address}</div></div>}
                         {v.contact_person&&<div><div style={{fontSize:11,color:'#9ca3af',marginBottom:2}}>Contact</div><div>{v.contact_person}{v.contact_number?' · '+v.contact_number:''}</div></div>}
+                        {(() => {
+                          const leadTimes=[...new Set(vPT.map(p=>p.sku).filter(Boolean))].map(sku=>{
+                            const ue=ueData.find(r=>r.sku===sku)
+                            return ue?.production_lead_time_days
+                          }).filter(v=>v!=null&&v>0)
+                          const lt=leadTimes[0]
+                          return lt?<div><div style={{fontSize:11,color:'#9ca3af',marginBottom:2}}>Production Lead Time</div><div style={{fontWeight:600}}>{lt} days</div></div>:null
+                        })()}
                       </div>
                       {vPT.length>0&&(
                         <>
                           <div style={{fontSize:11,fontWeight:700,textTransform:'uppercase',color:'#6b7280',marginBottom:8}}>Payment Terms by SKU</div>
                           <table style={{width:'100%',borderCollapse:'collapse',fontSize:12}}>
                             <thead><tr>
-                              <th style={th}>SKU</th><th style={th}>Terms</th>
+                              <th style={th}>SKU</th>
                               <th style={{...th,textAlign:'right' as const}}>Deposit</th>
                               <th style={{...th,textAlign:'right' as const}}>At Pickup</th>
                               <th style={{...th,textAlign:'right' as const}}>Balance</th>
-                              <th style={{...th,textAlign:'right' as const}}>Balance due (days after pickup)</th>
+                              <th style={{...th,textAlign:'right' as const}}>Balance due</th>
+                              <th style={{...th,textAlign:'right' as const}}>Days after pickup</th>
                             </tr></thead>
                             <tbody>{vPT.map(p=>(
                               <tr key={p.id} style={{borderBottom:'1px solid #f3f4f6'}}>
                                 <td style={td}><span style={{fontFamily:'monospace',fontSize:11,background:'#f3f4f6',padding:'2px 6px',borderRadius:4,cursor:'pointer',color:'#2563eb'}} onClick={()=>switchTab('ue')}>{p.sku}</span></td>
-                                <td style={{...td,color:'#6b7280',fontSize:11}}>{p.terms_description||'—'}</td>
                                 <td style={{...td,textAlign:'right' as const}}>{p.deposit_pct!=null?(p.deposit_pct*100).toFixed(0)+'%':'—'}</td>
                                 <td style={{...td,textAlign:'right' as const}}>{p.at_pickup_pct!=null?(p.at_pickup_pct*100).toFixed(0)+'%':'—'}</td>
                                 <td style={{...td,textAlign:'right' as const}}>{p.balance_pct!=null?(p.balance_pct*100).toFixed(0)+'%':'—'}</td>
@@ -1008,6 +1028,21 @@ export default function Home() {
                 <div style={{fontSize:12,color:'#6b7280',fontStyle:'italic'}}>{c.comment}</div>
               </div>
             ))}
+          </div>
+        </div>
+      )}
+
+      {editingASP&&(
+        <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.4)',display:'flex',alignItems:'center',justifyContent:'center',zIndex:100}}>
+          <div style={{background:'#fff',borderRadius:12,padding:28,width:400,boxShadow:'0 20px 60px rgba(0,0,0,0.15)'}}>
+            <h3 style={{fontSize:16,fontWeight:700,marginBottom:4}}>Edit {editingASP.label}</h3>
+            <p style={{fontSize:12,color:'#9ca3af',marginBottom:20}}>{editingASP.sku}</p>
+            <label style={{fontSize:12,fontWeight:500,display:'block',marginBottom:6}}>New Value{editingASP.field==='dtc_mix_pct'?' (enter as decimal e.g. 0.665 for 66.5%)':''}</label>
+            <input type="number" step="0.0001" value={aspNewVal} onChange={e=>setAspNewVal(e.target.value)} style={{width:'100%',padding:'8px 12px',border:'1px solid #e5e7eb',borderRadius:8,fontSize:14,marginBottom:20,boxSizing:'border-box'}} />
+            <div style={{display:'flex',gap:10}}>
+              <button onClick={()=>setEditingASP(null)} style={{flex:1,padding:'9px 0',border:'1px solid #e5e7eb',borderRadius:8,cursor:'pointer',background:'#fff',fontSize:14}}>Cancel</button>
+              <button onClick={saveASPEdit} disabled={!aspNewVal.trim()||aspSaving} style={{flex:1,padding:'9px 0',border:'none',borderRadius:8,cursor:'pointer',background:aspNewVal.trim()?'#111':'#d1d5db',color:'#fff',fontSize:14,fontWeight:600}}>{aspSaving?'Saving...':'Save'}</button>
+            </div>
           </div>
         </div>
       )}
