@@ -722,29 +722,37 @@ export default function Home() {
                             const startStock=getBOW(cfg.sku,'2026-03-23',unitsWarehouse)??curStock
                             let runningStock=startStock
                             const weeklyProjections: {week:string,stock:number,demand:number,toArrival:number,fromBOW:boolean}[]=[]
-                            
+
                             for(const week of weeks){
-                              // First check if we have BOW data for this week
-                              // Demand this week: from units_forecast if available, else calc from revenue
+                              // For specific warehouses use BOW spreadsheet data (already warehouse-specific depletion)
+                              // For All warehouse use calculated demand
+                              const bowVal=unitsWarehouse!=='All'?getBOW(cfg.sku,week,unitsWarehouse):null
+
+                              // Demand from actuals or revenue forecast
                               const unitFcst=unitsData.find(u=>u.sku===cfg.sku&&u.week_start===week)
-                              const fw=fwData.find(r=>r.week_start===week&&r.channel==='DTC'&&r.funnel===funnel)
+                              const fw=getFW(week,'DTC',funnel)
                               const calcDemand=(fw?.sales_forecast!=null&&cfg.dtc_mix_pct!=null&&cfg.asp_dtc)?
                                 Math.round(fw.sales_forecast*cfg.dtc_mix_pct/cfg.asp_dtc):
                                 (unitFcst?.units_forecast??Math.round(avgWeekly))
                               const demand=unitFcst?.units_actual??calcDemand??0
-                              
-                              // TO arrivals this week
+
+                              // TO arrivals this week filtered by warehouse
                               const toArrival=transfers.filter(t=>
-                                t.sku===cfg.sku&&
+                                t.sku===cfg.sku&&t.status!=='Cancelled'&&
                                 t.eta_destination&&
-                                t.eta_destination>=week&&
-                                t.eta_destination<(weeks[weeks.indexOf(week)+1]||'2099-01-01')&&
-                                t.status!=='Cancelled'
+                                t.eta_destination.split('T')[0]>=week&&
+                                t.eta_destination.split('T')[0]<(weeks[weeks.indexOf(week)+1]||'2099-01-01')&&
+                                (unitsWarehouse==='All'||t.destination===unitsWarehouse)
                               ).reduce((s,t)=>s+(t.qty||0),0)
-                              
-                              // Always calculate forward - BOW data only used as starting point
-                              runningStock=runningStock-demand+toArrival
-                              weeklyProjections.push({week,stock:runningStock,demand,toArrival,fromBOW:false})
+
+                              if(bowVal!=null){
+                                // BOW from spreadsheet is already warehouse-specific — add TO arrivals on top
+                                runningStock=bowVal+toArrival
+                                weeklyProjections.push({week,stock:runningStock,demand,toArrival,fromBOW:true})
+                              } else {
+                                runningStock=runningStock-demand+toArrival
+                                weeklyProjections.push({week,stock:runningStock,demand,toArrival,fromBOW:false})
+                              }
                             }
                             
                             return(
