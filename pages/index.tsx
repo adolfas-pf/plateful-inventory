@@ -228,14 +228,14 @@ export default function Home() {
   }
 
   async function saveToEdit() {
-    if(!editTO||!toEditComment.trim())return;setToEditSaving(true)
+    if(!editTO)return;setToEditSaving(true)
     const fields:Array<keyof TransferOrder>=['sku','qty','pick_up_date','eta_destination','shipping_method','status','destination','to_number']
     const logs:any[]=[]
     for(const f of fields){
       const oldVal=String((editTO as any)[f]??'').split('T')[0] // strip time component
       const newVal=String(toEdits[f]??'').split('T')[0]
       if(toEdits[f]!==undefined&&newVal!==oldVal)
-        logs.push({to_id:editTO.id,field_changed:f,previous_value:oldVal,new_value:newVal,comment:toEditComment})
+        logs.push({to_id:editTO.id,field_changed:f,previous_value:oldVal,new_value:newVal,comment:toEditComment||'(no comment)'})
     }
     // Always save - don't gate on logs.length
     await supabase.from('transfer_orders').update(toEdits).eq('id',editTO.id)
@@ -1171,11 +1171,11 @@ export default function Home() {
                 :<input type={type} value={(toEdits as any)[field]??''} onChange={e=>setToEdits(p=>({...p,[field]:type==='number'?parseInt(e.target.value)||0:e.target.value}))} style={{width:'100%',padding:'7px 10px',border:'1px solid #e5e7eb',borderRadius:6,fontSize:13,boxSizing:'border-box'}} />}
               </div>
             ))}
-            <label style={{fontSize:12,fontWeight:500,display:'block',marginBottom:4}}>Comment <span style={{color:'#9ca3af',fontWeight:400}}>(required)</span></label>
+            <label style={{fontSize:12,fontWeight:500,display:'block',marginBottom:4}}>Comment <span style={{color:'#9ca3af',fontWeight:400}}>(optional)</span></label>
             <textarea value={toEditComment} onChange={e=>setToEditComment(e.target.value)} rows={2} style={{width:'100%',padding:'8px 12px',border:'1px solid #e5e7eb',borderRadius:8,fontSize:13,resize:'vertical',marginBottom:20,boxSizing:'border-box'}} />
             <div style={{display:'flex',gap:10}}>
               <button onClick={()=>setEditTO(null)} style={{flex:1,padding:'9px 0',border:'1px solid #e5e7eb',borderRadius:8,cursor:'pointer',background:'#fff'}}>Cancel</button>
-              <button onClick={saveToEdit} disabled={!toEditComment.trim()||toEditSaving} style={{flex:1,padding:'9px 0',border:'none',borderRadius:8,cursor:'pointer',background:toEditComment.trim()?'#111':'#d1d5db',color:'#fff',fontSize:14,fontWeight:600}}>{toEditSaving?'Saving...':'Save'}</button>
+              <button onClick={saveToEdit} disabled={toEditSaving} style={{flex:1,padding:'9px 0',border:'none',borderRadius:8,cursor:'pointer',background:'#111',color:'#fff',fontSize:14,fontWeight:600}}>{toEditSaving?'Saving...':'Save'}</button>
             </div>
           </div>
         </div>
